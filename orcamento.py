@@ -5,10 +5,10 @@ import os
 from datetime import datetime
 import unicodedata
 import json 
+from io import BytesIO # Essencial para ler/escrever arquivos em memória
 
 # --- NOVAS BIBLIOTECAS PARA O PDF (Orçamento) ---
 import base64
-from io import BytesIO
 from xhtml2pdf import pisa
 import sys
 import subprocess
@@ -35,47 +35,37 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 # --- FIM DAS NOVAS BIBLIOTECAS ---
 
 
-# --- CAMINHOS (Configure o seu) ---
-CAMINHO_BASE = "C:/Users/Amanda/Desktop/Excel"
+# --- CAMINHOS (AGORA SÃO RELATIVOS OU CONSTANTES) ---
+# CAMINHO_BASE não é mais necessário
 ARQUIVO_BASE = "Planilha Salva Sono_1.xlsx" 
-LOGO_PATH = os.path.join(CAMINHO_BASE, "Logo.png")
+LOGO_PATH = "Logo.png" # Lê o logo do repositório GitHub
 HEADER_DA_PLANILHA = 14 
+# Caminhos de salvar PDF/Rascunho não são mais usados.
+# --- FIM DA MUDANÇA ---
 
-# --- CAMINHO PARA SALVAR OS PDFS (LOCAL) ---
-CAMINHO_SALVAR_PDF = os.path.join(CAMINHO_BASE, "Orçamentos Salvos")
-os.makedirs(CAMINHO_SALVAR_PDF, exist_ok=True)
-
-# --- NOVO: CAMINHO PARA SALVAR OS VALES ---
-CAMINHO_SALVAR_VALE_PDF = os.path.join(CAMINHO_BASE, "Vales Salvos")
-os.makedirs(CAMINHO_SALVAR_VALE_PDF, exist_ok=True)
-
-# --- NOVO: CAMINHO PARA SALVAR OS PEDIDOS DE LIVRO ---
-CAMINHO_SALVAR_LIVRO_PDF = os.path.join(CAMINHO_BASE, "Pedidos Livro Salvos")
-os.makedirs(CAMINHO_SALVAR_LIVRO_PDF, exist_ok=True)
-
-# --- CAMINHO PARA SALVAR OS RASCUNHOS ---
-CAMINHO_SALVAR_RASCUNHOS = os.path.join(CAMINHO_BASE, "Rascunhos Salvos")
-os.makedirs(CAMINHO_SALVAR_RASCUNHOS, exist_ok=True)
 
 # --- CONFIGURAÇÕES DO GOOGLE DRIVE (COM SEUS IDs) ---
 PLANILHA_MESTRE_ID = "1P2aJCePtRVaqx9pnw2t_L1vwiKeIFoP-FkLAGXXb7rY" 
 PASTA_DRIVE_PRINCIPAL_ID = "1tzmGPT9mvsfCrBW8vP81f-1kQ6J9iv1b"
 PASTA_DRIVE_ARQUIVO_MORTO_ID = "1tiKYOxH5reHkTnvSboY5TioNl-Uk-Gbk"
-CLIENT_SECRET_FILE = os.path.join(CAMINHO_BASE, "client_secret.json")
+# --- MUDANÇA (SEU ID FOI ADICIONADO) ---
+PASTA_DRIVE_PLANILHAS_ID = "1iCofZQcZKSSMqEef7xGdghBHlSJYq2Sh"
+# --- FIM DA MUDANÇA ---
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+# CLIENT_SECRET_FILE não é mais um arquivo, usaremos st.secrets
 # --- FIM DAS CONFIGURAÇÕES GOOGLE ---
 
 COR_PRINCIPAL_PAPELARIA = "#FF6600" # Laranja Forte
 # --- FIM DA COR ---
 
-# --- (NOVO) REGISTRO DA FONTE ARIAL ---
+# --- (NOVO) REGISTRO DA FONTE ARIAL (LENDO DO REPOSITÓRIO) ---
 try:
-    caminho_arial_normal = os.path.join(CAMINHO_BASE, "arial.ttf")
-    caminho_arial_bold = os.path.join(CAMINHO_BASE, "arialbd.ttf")
+    caminho_arial_normal = "arial.ttf"
+    caminho_arial_bold = "arialbd.ttf"
     
     pdfmetrics.registerFont(TTFont('Arial', caminho_arial_normal))
     pdfmetrics.registerFont(TTFont('Arial-Bold', caminho_arial_bold))
@@ -87,35 +77,87 @@ try:
     styles['Heading3'].fontName = 'Arial-Bold'
     
 except Exception as e:
-    print(f"AVISO: Não foi possível carregar a fonte Arial. O PDF usará a fonte padrão. Erro: {e}")
-    print("Verifique se 'arial.ttf' e 'arialbd.ttf' estão na pasta 'Excel'.")
+    # Em nuvem, se a fonte falhar, o app quebra.
+    st.error(f"Erro FATAL: Não foi possível carregar as fontes 'arial.ttf' ou 'arialbd.ttf'. Verifique se elas estão no repositório GitHub. Erro: {e}")
+    st.stop()
 # --- FIM DO REGISTRO DA FONTE ---
 
 
-# --- FUNÇÕES (EXISTENTES) ---
+# --- FUNÇÕES DE ARQUIVO (MODIFICADAS PARA NUVEM) ---
 
-def extrair_data_validade():
+# ABRE O ARQUIVO (NÃO É MAIS USADO, MAS MANTIDO POR PRECAUÇÃO)
+def abrir_arquivo(caminho):
+    st.warning("Função 'abrir_arquivo' não é suportada na nuvem. Use o botão de download.")
+
+# --- NOVA FUNÇÃO HELPER (DOWNLOAD DO DRIVE) ---
+@st.cache_data(ttl=600) # Cache de 10 minutos
+def download_excel_bytes(_drive_service, folder_id, file_name):
+    """Encontra um arquivo Excel no Drive pelo nome e o baixa para a memória (BytesIO)."""
     try:
-        wb = openpyxl.load_workbook(os.path.join(CAMINHO_BASE, ARQUIVO_BASE), data_only=True)
+        # 1. Encontrar o arquivo
+        query = f"name='{file_name}' and '{folder_id}' in parents and trashed=false"
+        response = _drive_service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
+        files = response.get('files', [])
+        
+        file_id = files[0].get('id') if files else None
+        
+        if not file_id:
+            st.error(f"Erro Crítico: Arquivo '{file_name}' não encontrado no Google Drive (Pasta ID: {folder_id}).")
+            return None
+            
+        # 2. Baixar o arquivo para a memória
+        request = _drive_service.files().get_media(fileId=file_id)
+        file_buffer = BytesIO()
+        downloader = MediaIoBaseDownload(file_buffer, request)
+        
+        done = False
+        while done is False:
+            status, done = downloader.next_chunk()
+            
+        file_buffer.seek(0)
+        return file_buffer
+        
+    except Exception as e:
+        st.error(f"Erro ao baixar o arquivo '{file_name}' do Drive: {e}")
+        st.exception(e)
+        return None
+
+# --- FUNÇÃO ATUALIZADA (LÊ DO DRIVE) ---
+@st.cache_data(ttl=3600) # Cache de 1 hora
+def extrair_data_validade(_drive_service, folder_id):
+    try:
+        file_buffer = download_excel_bytes(_drive_service, folder_id, ARQUIVO_BASE)
+        if file_buffer is None:
+            return "Erro ao ler base"
+            
+        wb = openpyxl.load_workbook(file_buffer, data_only=True)
         ws = wb["Base"] 
         data = ws["F5"].value
         if isinstance(data, datetime):
             return data.strftime("%d/%m/%Y")
         return str(data) if data else "Não definida"
     except Exception as e:
-        st.error(f"Erro ao ler data de validade: {e}"); return "Erro"
+        st.error(f"Erro ao ler data de validade do Drive: {e}"); return "Erro"
 
-def extrair_observacoes_iniciais(ws):
+# --- FUNÇÃO ATUALIZADA (LÊ DO DRIVE) ---
+@st.cache_data(ttl=600) # Cache de 10 minutos
+def extrair_observacoes_iniciais(_drive_service, folder_id, file_name, aba):
     nao_trabalhamos = []
     para_escolher = []
     try:
+        file_buffer = download_excel_bytes(_drive_service, folder_id, file_name)
+        if file_buffer is None:
+            return "", ""
+            
+        wb = openpyxl.load_workbook(file_buffer, data_only=True)
+        ws = wb[aba]
         for col in range(3, 7):
             val_nt = ws.cell(row=12, column=col).value
             val_pe = ws.cell(row=13, column=col).value
             if val_nt: nao_trabalhamos.append(str(val_nt).strip())
             if val_pe: para_escolher.append(str(val_pe).strip())
     except Exception as e:
-        st.warning(f"Erro ao extrair observações iniciais: {e}")
+        st.warning(f"Erro ao extrair observações iniciais de '{file_name}' (Aba: {aba}): {e}")
     return "\n".join(nao_trabalhamos), "\n".join(para_escolher)
 
 def normalizar_texto(texto):
@@ -132,22 +174,29 @@ def sanitizar_nome_arquivo(nome):
     return nome.strip()
 
 def formatar_telefone(tel_str):
-    """Remove letras e formata para (xx) xxxxx.xxxx ou (xx) xxxx.xxxx"""
     numeros = "".join(filter(str.isdigit, tel_str))
     if len(numeros) == 11:
-        return f"({numeros[:2]}) {numeros[2:7]}.{numeros[7:]}" # Celular
+        return f"({numeros[:2]}) {numeros[2:7]}.{numeros[7:]}"
     elif len(numeros) == 10:
-        return f"({numeros[:2]}) {numeros[2:6]}.{numeros[6:]}" # Fixo
-    return tel_str # Retorna o original se não for 10 ou 11 digitos
+        return f"({numeros[:2]}) {numeros[2:6]}.{numeros[6:]}"
+    return tel_str
 
-def carregar_itens(caminho_arquivo, aba):
+# --- FUNÇÃO ATUALIZADA (LÊ DO DRIVE) ---
+@st.cache_data(ttl=600) # Cache de 10 minutos
+def carregar_itens(_drive_service, folder_id, file_name, aba):
     try:
-        df = pd.read_excel(caminho_arquivo, sheet_name=aba, header=HEADER_DA_PLANILHA, dtype=str)
+        file_buffer = download_excel_bytes(_drive_service, folder_id, file_name)
+        if file_buffer is None:
+            st.error(f"Não foi possível carregar o arquivo '{file_name}' do Drive.")
+            return pd.DataFrame()
+            
+        df = pd.read_excel(file_buffer, sheet_name=aba, header=HEADER_DA_PLANILHA, dtype=str, engine='openpyxl')
     except Exception as e:
-        st.error(f"Erro ao carregar {aba}: {e}"); return pd.DataFrame()
+        st.error(f"Erro ao ler {aba} de '{file_name}': {e}"); return pd.DataFrame()
+        
     df.columns = [normalizar_texto(col) for col in df.columns.astype(str)]
     if not any("COD" in c for c in df.columns) or not any("TIPO" in c for c in df.columns):
-        st.error(f"❌ Coluna 'COD' ou 'TIPO' não encontrada na aba '{aba}'."); return pd.DataFrame()
+        st.error(f"❌ Coluna 'COD' ou 'TIPO' não encontrada na aba '{aba}' do arquivo '{file_name}'."); return pd.DataFrame()
     cod_col = [c for c in df.columns if "COD" in c][0]
     qtd_col_nome = [c for c in df.columns if "QTD" in c or "QTDE" in c or "QUANT" in c]
     col_tipo = [c for c in df.columns if "TIPO" in c][0]
@@ -162,14 +211,21 @@ def carregar_itens(caminho_arquivo, aba):
     df["COD"] = df["COD"].astype(str).str.strip() 
     df[col_tipo] = df[col_tipo].astype(str).apply(normalizar_texto)
     if "QTD" not in df.columns: df["QTD"] = 1
-    df = df[df["COD"].str.isdigit().fillna(False)] # Filtro de lixo
+    df = df[df["COD"].str.isdigit().fillna(False)] 
     return df
 
-@st.cache_data
-def carregar_base_dados():
-    caminho_base_dados = os.path.join(CAMINHO_BASE, ARQUIVO_BASE)
+# --- FUNÇÃO ATUALIZADA (LÊ DO DRIVE) ---
+# O @st.cache_data foi removido daqui e colocado no helper 'download_excel_bytes'
+def carregar_base_dados(drive_service, folder_id):
     try:
-        df_base = pd.read_excel(caminho_base_dados, sheet_name="Base", dtype=str) 
+        # --- MUDANÇA PRINCIPAL ---
+        file_buffer = download_excel_bytes(drive_service, folder_id, ARQUIVO_BASE)
+        if file_buffer is None:
+            st.error("Não foi possível carregar a base de dados do Google Drive.")
+            return None, None
+        df_base = pd.read_excel(file_buffer, sheet_name="Base", dtype=str, engine='openpyxl')
+        # --- FIM DA MUDANÇA ---
+            
         df_base.columns = [normalizar_texto(col) for col in df_base.columns.astype(str)]
         col_cod_base = [c for c in df_base.columns if "COD" in c][0]
         col_desc_base = [c for c in df_base.columns if "DESC" in c][0]
@@ -199,13 +255,12 @@ def carregar_base_dados():
                 "valor": row["VALOR_NUM"]
             }
         
-        st.success("Base de dados (Excel) carregada!")
+        st.success("Base de dados (do Google Drive) carregada!")
         return base_dados_dict, lista_busca 
     except Exception as e:
-        st.error(f"Erro FATAL ao carregar a Base de Dados (Excel): {e}"); return None, None
+        st.error(f"Erro FATAL ao processar a Base de Dados (do Drive): {e}"); return None, None
 
 def configurar_e_calcular_tabela(df_entrada, base_dados):
-    # Se df_entrada não for um DataFrame (ex: None ou lista vazia), cria um vazio
     if not isinstance(df_entrada, pd.DataFrame):
         df_para_editar = pd.DataFrame(columns=["COD", "QTD", "DESCRICAO", "VALOR UNITARIO"])
     else:
@@ -221,10 +276,8 @@ def configurar_e_calcular_tabela(df_entrada, base_dados):
     col_valor_unit = col_valor_unit_lista[0] if col_valor_unit_lista else col_valor_unit_padrao
     col_desc = col_desc_lista[0] if col_desc_lista else col_desc_padrao
     
-    # --- [CORREÇÃO PREÇO LIVRO] ---
     col_tipo_lista = [c for c in df_para_editar.columns if "TIPO" in c]
     col_tipo_real = col_tipo_lista[0] if col_tipo_lista else None
-    # --- FIM DA CORREÇÃO ---
     
     if 'COD' not in df_para_editar.columns: df_para_editar['COD'] = None
     if 'QTD' not in df_para_editar.columns: df_para_editar['QTD'] = 1
@@ -241,34 +294,26 @@ def configurar_e_calcular_tabela(df_entrada, base_dados):
     ].copy()
     
     df_para_editar["QTD"] = pd.to_numeric(df_para_editar["QTD"], errors="coerce").fillna(1)
-    # Converte os valores da planilha (incluindo os preços certos dos livros) para número
     df_para_editar[col_valor_unit] = pd.to_numeric(df_para_editar[col_valor_unit], errors="coerce").fillna(0)
     
-    # --- LÓGICA DE DESCRIÇÃO ORIGINAL (QUE VOCÊ GOSTOU) ---
     for index, linha in df_para_editar.iterrows():
         cod_atual = str(linha["COD"]).strip().upper()
         desc_atual = linha[col_desc]
         
-        # --- [CORREÇÃO PREÇO LIVRO] ---
         tipo_atual = ""
         if col_tipo_real and col_tipo_real in linha:
             tipo_atual = str(linha[col_tipo_real]).strip().upper()
-        # --- FIM DA CORREÇÃO ---
         
-        info_base = base_dados.get(cod_atual) # VLOOKUP
+        info_base = base_dados.get(cod_atual)
         
         if info_base:
             desc_base = info_base["descricao"]
-            valor_base = info_base["valor"] # Este é o valor da BASE (pode ser 0)
+            valor_base = info_base["valor"] 
 
-            # --- [CORREÇÃO PREÇO LIVRO] ---
             tipos_livro = ["LIVRO", "DICIONARIO", "LIVROS", "DICIONÁRIO"]
             
-            # Se NÃO for um livro, atualize o preço.
-            # Se FOR um livro, NÃO FAÇA NADA (deixe o preço da planilha)
             if tipo_atual not in tipos_livro:
                 df_para_editar.at[index, col_valor_unit] = valor_base
-            # --- FIM DA CORREÇÃO ---
 
             is_empty = pd.isna(desc_atual) or str(desc_atual).strip() == "" or "CODIGO NAO ENCONTRADO" in str(desc_atual)
             is_standard = (str(desc_atual).strip().upper() == str(desc_base).strip().upper())
@@ -279,27 +324,24 @@ def configurar_e_calcular_tabela(df_entrada, base_dados):
         else:
             df_para_editar.at[index, col_desc] = "--- CODIGO NAO ENCONTRADO ---"
             df_para_editar.at[index, col_valor_unit] = 0.0
-    # --- FIM DA LÓGICA DE DESCRIÇÃO ---
             
     df_para_editar["QTD"] = pd.to_numeric(df_para_editar["QTD"], errors="coerce").fillna(1)
     df_para_editar[col_valor_unit] = pd.to_numeric(df_para_editar[col_valor_unit], errors="coerce").fillna(0)
     df_para_editar["Subtotal"] = (df_para_editar["QTD"] * df_para_editar[col_valor_unit]).round(2)
     valor_total = df_para_editar["Subtotal"].sum()
     
-    # --- LAYOUT APERTADO (SEM COR) ---
     config_colunas = {
         "COD": st.column_config.Column("COD", width="small"),
         col_desc: st.column_config.Column("Descrição", width="large"),
         "QTD": st.column_config.NumberColumn("QTD", width="small"),
         col_valor_unit: st.column_config.NumberColumn("Valor Unit.", format="R$ %.2f", disabled=True, width="small"),
         "Subtotal": st.column_config.NumberColumn("Subtotal", format="R$ %.2f", disabled=True, width="small"),
-        "TIPO": None # Oculta a coluna TIPO
+        "TIPO": None
     }
     
     for col in colunas_lixo: 
         if col not in config_colunas:
             config_colunas[col] = None
-    # --- FIM DA MUDANÇA ---
 
     ordem_colunas = ["COD", col_desc, "QTD", col_valor_unit, "Subtotal"]
     
@@ -316,7 +358,7 @@ def set_add_flag():
     elif st.session_state.orcamento_mode == "Pedido de Livro":
         tipo = "LIVRO"
     else:
-        tipo = st.session_state.get("tipo_adicionar", "Material") # Pega do radio
+        tipo = st.session_state.get("tipo_adicionar", "Material") 
 
     if item_str and cod:
         st.session_state.item_para_adicionar = {"COD": cod, "QTD": qtd, "TIPO": tipo.upper(), "ITEM_STR": item_str}
@@ -325,31 +367,17 @@ def set_add_flag():
         st.session_state.item_para_adicionar = "ERRO"
 
 
-# --- NOVAS FUNÇÕES PARA GERAR PDF (E ABRIR) ---
+# --- FUNÇÕES PDF (MODIFICADAS PARA NUVEM) ---
 
 @st.cache_data
 def converter_imagem_base64(caminho_imagem):
-    """Lê uma imagem e converte para string base64 para embutir no HTML."""
     try:
         with open(caminho_imagem, "rb") as img_file:
             return base64.b64encode(img_file.read()).decode('utf-8')
     except Exception as e:
-        st.error(f"Erro ao carregar o logo: {e}")
+        st.error(f"Erro ao carregar o logo '{caminho_imagem}': {e}")
         return None
 
-def abrir_arquivo(caminho):
-    """Tenta abrir o arquivo salvo no sistema operacional do usuário."""
-    try:
-        if sys.platform == "win32":
-            os.startfile(caminho)
-        elif sys.platform == "darwin": # macOS
-            subprocess.run(['open', caminho], check=True)
-        else: # Linux
-            subprocess.run(['xdg-open', caminho], check=True)
-    except Exception as e:
-        st.warning(f"Não consegui abrir o arquivo automaticamente, mas ele está salvo. Erro: {e}")
-
-# --- MUDANÇA (5 CESTAS): PDF de Orçamento atualizado ---
 def gerar_html_para_pdf(logo_b64, escola, serie, nome_cliente, data_val, df_mat, df_vale, df_livro, df_integral, df_bilingue, obs_nt_str, obs_pe_str, obs_outras_str, totais):
     html_style = f"""
     <style>
@@ -373,7 +401,7 @@ def gerar_html_para_pdf(logo_b64, escola, serie, nome_cliente, data_val, df_mat,
         h2 {{ color: #333; border-bottom: 1px solid #ccc; padding-bottom: 2px; font-size: 14pt; margin-top: 20px; }}
         .item-table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
         .item-table th {{ text-align: center; padding: 2px 2px; border-bottom: 2px solid #333; font-size: 8pt; text-transform: uppercase; }}
-        .item-table td {{ padding: 2px 2px; vertical-align: middle; }}
+        .item-table td {{ padding: 2px; vertical-align: middle; }}
         .col-cod {{ width: 12%; }}
         .col-desc {{ width: 50%; }}
         .col-qtd {{ width: 8%; text-align: center; }}
@@ -440,10 +468,10 @@ def gerar_html_para_pdf(logo_b64, escola, serie, nome_cliente, data_val, df_mat,
             """
         tabela_html += '</tbody></table>'
         if totais[totais_chave] > 0:
-            tabela_html += f"<div class='subtotal-final'>Subtotal: R$ {totais[totais_chave]:,.2f}</div>"
+            subtotal_formatado = f"{totais[totais_chave]:,.2f}"
+            tabela_html += f"<div class='subtotal-final'>Subtotal: R$ {subtotal_formatado}</div>"
         return tabela_html
 
-    # --- INÍCIO DA MUDANÇA (5 CESTAS) ---
     if not df_mat.empty:
         html_body += "<h2>Itens de Material Individual</h2>"
         html_body += criar_tabela_html(df_mat, "material")
@@ -463,7 +491,6 @@ def gerar_html_para_pdf(logo_b64, escola, serie, nome_cliente, data_val, df_mat,
     if not df_bilingue.empty:
         html_body += "<h2>Itens do Programa Bilíngue</h2>"
         html_body += criar_tabela_html(df_bilingue, "bilingue")
-    # --- FIM DA MUDANÇA ---
             
     html_body += f"""
     <div class="total-section">
@@ -501,64 +528,39 @@ def gerar_html_para_pdf(logo_b64, escola, serie, nome_cliente, data_val, df_mat,
     """
     return f"<html><head>{html_style}</head><body>{html_body}</body></html>"
 
-# --- ATUALIZAÇÃO: FUNÇÃO DO PDF DO VALE (REPORTLAB, COM SEU LAYOUT) ---
-def gerar_vale_pdf_reportlab(caminho_logo, escola, serie, aluno, responsavel, telefone, df_vale, total_vale):
-    """Monta um PDF de Vale Avulso usando ReportLab, com o layout que você pediu."""
-    
-    nome_aluno_sanitizado = sanitizar_nome_arquivo(aluno)
-    escola_limpa = escola.split('_')[0]
-    nome_pdf = f"Vale {escola_limpa} {serie} - {nome_aluno_sanitizado}.pdf"
-    caminho_pdf = os.path.join(CAMINHO_SALVAR_VALE_PDF, nome_pdf)
 
+def gerar_vale_pdf_reportlab(caminho_logo, escola, serie, aluno, responsavel, telefone, df_vale, total_vale):
+    """Monta um PDF de Vale Avulso (retorna BytesIO)."""
+    
+    pdf_buffer = BytesIO()
     doc = SimpleDocTemplate(
-        caminho_pdf,
+        pdf_buffer,
         pagesize=A4,
         rightMargin=1.5*cm, leftMargin=1.5*cm, topMargin=1.5*cm, bottomMargin=1.5*cm
     )
     styles = getSampleStyleSheet()
     elementos = []
 
-    style_escola = ParagraphStyle(
-        name="Escola", parent=styles["Normal"],
-        fontName="Arial-Bold", fontSize=14, alignment=TA_CENTER
-    )
-    style_serie = ParagraphStyle(
-        name="Serie", parent=styles["Normal"],
-        fontName="Arial", fontSize=12, alignment=TA_CENTER
-    )
+    style_escola = ParagraphStyle(name="Escola", parent=styles["Normal"], fontName="Arial-Bold", fontSize=14, alignment=TA_CENTER)
+    style_serie = ParagraphStyle(name="Serie", parent=styles["Normal"], fontName="Arial", fontSize=12, alignment=TA_CENTER)
     
     logo_flowable = Spacer(1, 1) 
-    if os.path.exists(caminho_logo):
-        try:
-            logo_flowable = RLImage(caminho_logo, width=180, height=80) 
-            logo_flowable.hAlign = 'LEFT'
-        except Exception:
-            pass 
+    try:
+        logo_flowable = RLImage(caminho_logo, width=180, height=80) 
+        logo_flowable.hAlign = 'LEFT'
+    except Exception:
+        pass 
             
-    header_data = [
-        [logo_flowable, [
-            Paragraph(f"ESCOLA: {escola_limpa.upper()}", style_escola),
-            Spacer(1, 12),
-            Paragraph(f"SÉRIE: {serie.upper()}", style_serie)
-        ]]
-    ]
+    header_data = [[logo_flowable, [Paragraph(f"ESCOLA: {escola.upper()}", style_escola), Spacer(1, 12), Paragraph(f"SÉRIE: {serie.upper()}", style_serie)]]]
     header_table = Table(header_data, colWidths=[180 + 10, None]) 
-    header_table.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('ALIGN', (1, 0), (1, 0), 'CENTER'),
-    ]))
+    header_table.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), ('ALIGN', (1, 0), (1, 0), 'CENTER')]))
     elementos.append(header_table)
     elementos.append(Spacer(1, 0.5*cm))
 
-    style_info_aluno = ParagraphStyle(
-        name="InfoAluno", parent=styles["Normal"],
-        fontName="Arial", fontSize=11, leading=14
-    )
-    info_text = (
-        f"<b>RESPONSÁVEL:</b> {responsavel.upper()}<br/>"
-        f"<b>ALUNO:</b> {aluno.upper()}<br/>"
-        f"<b>TELEFONE:</b> {telefone}"
-    )
+    style_info_aluno = ParagraphStyle(name="InfoAluno", parent=styles["Normal"], fontName="Arial", fontSize=11, leading=14)
+    info_text = (f"<b>RESPONSÁVEL:</b> {responsavel.upper()}<br/>"
+                 f"<b>ALUNO:</b> {aluno.upper()}<br/>"
+                 f"<b>TELEFONE:</b> {telefone}")
     info = Paragraph(info_text, style_info_aluno)
     elementos += [info, Spacer(1, 0.5*cm)]
 
@@ -568,9 +570,7 @@ def gerar_vale_pdf_reportlab(caminho_logo, escola, serie, aluno, responsavel, te
     style_normal_left = ParagraphStyle(name="NormalLeft", parent=styles["Normal"], fontName="Arial", alignment=TA_LEFT, fontSize=9)
     style_normal_center = ParagraphStyle(name="NormalCenter", parent=styles["Normal"], fontName="Arial", alignment=TA_CENTER, fontSize=9)
     
-    dados_tabela = [
-        ["COD", "DESCRIÇÃO", "QTD", "VLR. UNITÁRIO", "VLR. TOTAL"]
-    ]
+    dados_tabela = [["COD", "DESCRIÇÃO", "QTD", "VLR. UNITÁRIO", "VLR. TOTAL"]]
 
     for _, row in df_vale.iterrows():
         cod = Paragraph(str(row["COD"]), style_normal_center)
@@ -578,205 +578,111 @@ def gerar_vale_pdf_reportlab(caminho_logo, escola, serie, aluno, responsavel, te
         qtd = Paragraph(str(int(row["QTD"])), style_normal_center)
         
         valor_unit = row[col_valor_unit_real]
-        if valor_unit == 0:
-            valor_unit_par = Paragraph(f"<font color='red'>R$ 0,00</font>", style_normal_center)
-        else:
-            valor_unit_par = Paragraph(f"R$ {valor_unit:,.2f}", style_normal_center)
-        
+        valor_unit_par = Paragraph(f"R$ {valor_unit:,.2f}", style_normal_center) if valor_unit != 0 else Paragraph(f"<font color='red'>R$ 0,00</font>", style_normal_center)
         total_par = Paragraph(f"R$ {row['Subtotal']:,.2f}", style_normal_center)
         
         dados_tabela.append([cod, desc, qtd, valor_unit_par, total_par])
 
     tabela = Table(dados_tabela, colWidths=[60, 260, 45, 80, 80])
-    
-    tabela.setStyle(
-        TableStyle(
-            [
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor(COR_PRINCIPAL_PAPELARIA)), 
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                ('FONTNAME', (0, 0), (-1, 0), "Arial-Bold"),
-                ('ALIGN', (0, 0), (-1, 0), "CENTER"), 
-                ('VALIGN', (0, 0), (-1, -1), "MIDDLE"),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('ALIGN', (1, 1), (1, -1), "LEFT"), 
-                ('ALIGN', (3, 1), (-1, -1), "CENTER"), 
-                ('FONTSIZE', (0, 1), (-1, -1), 9), 
-                ('TOPPADDING', (0, 0), (-1, -1), 1), 
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 1), 
-                ('FONTNAME', (0, 1), (-1, -1), 'Arial')
-            ]
-        )
-    )
-    
+    tabela.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor(COR_PRINCIPAL_PAPELARIA)), 
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white), ('FONTNAME', (0, 0), (-1, 0), "Arial-Bold"),
+        ('ALIGN', (0, 0), (-1, 0), "CENTER"), ('VALIGN', (0, 0), (-1, -1), "MIDDLE"),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey), ('ALIGN', (1, 1), (1, -1), "LEFT"), 
+        ('ALIGN', (3, 1), (-1, -1), "CENTER"), ('FONTSIZE', (0, 1), (-1, -1), 9), 
+        ('TOPPADDING', (0, 0), (-1, -1), 1), ('BOTTOMPADDING', (0, 0), (-1, -1), 1), 
+        ('FONTNAME', (0, 1), (-1, -1), 'Arial')
+    ]))
     elementos += [tabela, Spacer(1, 12)]
 
     total_geral = df_vale["Subtotal"].sum()
-    style_total = ParagraphStyle(
-        name="Total", parent=styles["Heading3"],
-        fontName="Arial-Bold",
-        alignment=TA_LEFT, fontSize=14
-    )
-    total_paragraph = Paragraph(
-        f"<b>Total Geral:</b> R$ {total_geral:,.2f}",
-        style_total,
-    )
+    style_total = ParagraphStyle(name="Total", parent=styles["Heading3"], fontName="Arial-Bold", alignment=TA_LEFT, fontSize=14)
+    total_paragraph = Paragraph(f"<b>Total Geral:</b> R$ {total_geral:,.2f}", style_total)
     elementos.append(total_paragraph)
 
-    style_footer_contato = ParagraphStyle(
-        name="FooterContato", 
-        parent=styles["Normal"],
-        fontName="Arial", 
-        fontSize=8, 
-        textColor=colors.grey,
-        alignment=TA_CENTER,
-        borderTopWidth=1, 
-        borderTopColor=colors.lightgrey,
-        paddingTop=5, 
-        marginTop=20
-    )
+    style_footer_contato = ParagraphStyle(name="FooterContato", parent=styles["Normal"], fontName="Arial", fontSize=8, textColor=colors.grey, alignment=TA_CENTER, borderTopWidth=1, borderTopColor=colors.lightgrey, paddingTop=5, marginTop=20)
     contato_texto = "Rua Souza Pereira, 214 - Centro - Sorocaba/SP | E-mail: blocoos@blocoos.com.br | Fone/Whatsapp: (15) 3233-8329"
     elementos.append(Paragraph(contato_texto, style_footer_contato))
     
     doc.build(elementos)
-    abrir_arquivo(caminho_pdf)
-    
-    return caminho_pdf
-# --- FIM DA FUNÇÃO DE VALE ---
+    pdf_buffer.seek(0)
+    return pdf_buffer.getvalue()
 
-# --- INÍCIO DA NOVA FUNÇÃO (PEDIDO DE LIVRO 2 VIAS) ---
 
 def _build_one_copy_story(caminho_logo, cliente, telefone, df_livro, total_livro, obs_livro, styles, cor_principal):
     """Helper que constrói os 'flowables' para uma única via."""
     elementos = []
     
-    # --- Estilos (baseados no Arial já registrado) ---
-    style_cliente = ParagraphStyle(
-        name="Cliente", parent=styles["Normal"],
-        fontName="Arial-Bold", fontSize=14, alignment=TA_CENTER
-    )
-    style_info = ParagraphStyle(
-        name="Info", parent=styles["Normal"],
-        fontName="Arial", fontSize=11, alignment=TA_CENTER, leading=14
-    )
+    style_cliente = ParagraphStyle(name="Cliente", parent=styles["Normal"], fontName="Arial-Bold", fontSize=14, alignment=TA_CENTER)
+    style_info = ParagraphStyle(name="Info", parent=styles["Normal"], fontName="Arial", fontSize=11, alignment=TA_CENTER, leading=14)
     style_normal_left = ParagraphStyle(name="NormalLeft", parent=styles["Normal"], fontName="Arial", alignment=TA_LEFT, fontSize=9)
     style_normal_center = ParagraphStyle(name="NormalCenter", parent=styles["Normal"], fontName="Arial", alignment=TA_CENTER, fontSize=9)
-    
-    # --- [NOVO] Estilo para os checkboxes ---
     style_checkbox = ParagraphStyle(name="Checkbox", parent=styles["Normal"], fontName="Arial", alignment=TA_CENTER, fontSize=12)
+    style_total = ParagraphStyle(name="Total", parent=styles["Heading3"], fontName="Arial-Bold", alignment=TA_LEFT, fontSize=14)
+    style_obs_fixa = ParagraphStyle(name="ObsFixa", parent=styles["Normal"], fontName="Arial-Bold", fontSize=9, leading=11, textColor=colors.red, alignment=TA_CENTER)
     
-    style_total = ParagraphStyle(
-        name="Total", parent=styles["Heading3"],
-        fontName="Arial-Bold", alignment=TA_LEFT, fontSize=14
-    )
-    
-    # --- [NOVO] Estilo para a observação fixa ---
-    style_obs_fixa = ParagraphStyle(
-        name="ObsFixa", parent=styles["Normal"],
-        fontName="Arial-Bold", fontSize=9, leading=11,
-        textColor=colors.red, # Texto em vermelho
-        alignment=TA_CENTER
-    )
-    
-    # --- 1. Logo ---
     logo_flowable = Spacer(1, 1)
-    if os.path.exists(caminho_logo):
-        try:
-            logo_flowable = RLImage(caminho_logo, width=150, height=67) # Tamanho um pouco menor
-            logo_flowable.hAlign = 'CENTER'
-        except Exception:
-            pass
+    try:
+        logo_flowable = RLImage(caminho_logo, width=150, height=67)
+        logo_flowable.hAlign = 'CENTER'
+    except Exception:
+        pass
     elementos.append(logo_flowable)
     elementos.append(Spacer(1, 0.5*cm))
 
-    # --- 2. Título e Infos ---
     elementos.append(Paragraph("PEDIDO DE LIVROS", style_cliente))
     elementos.append(Spacer(1, 0.2*cm))
     info_text = f"<b>CLIENTE:</b> {cliente.upper()}<br/><b>TELEFONE:</b> {telefone}"
     elementos.append(Paragraph(info_text, style_info))
     elementos.append(Spacer(1, 0.2*cm)) 
 
-    # --- Campo de Observação (Opcional) ---
     if obs_livro and obs_livro.strip() != "":
-        style_obs = ParagraphStyle(
-            name="Obs", parent=styles["Normal"],
-            fontName="Arial", fontSize=9, leading=11,
-            borderWidth=0.5, borderColor=colors.grey, padding=(5, 5, 5, 5),
-            borderRadius=2
-        )
+        style_obs = ParagraphStyle(name="Obs", parent=styles["Normal"], fontName="Arial", fontSize=9, leading=11, borderWidth=0.5, borderColor=colors.grey, padding=(5, 5, 5, 5), borderRadius=2)
         obs_formatada = obs_livro.replace('\n', '<br/>')
         elementos.append(Paragraph(f"<b>OBSERVAÇÃO:</b><br/>{obs_formatada}", style_obs))
         elementos.append(Spacer(1, 0.3*cm))
     
     elementos.append(Spacer(1, 0.3*cm))
     
-    # --- 3. Tabela de Itens ---
     col_desc_real = [c for c in df_livro.columns if "DESC" in c][0]
     
-    # --- [NOVO] Cabeçalho com ENC. e ENTR. ---
-    dados_tabela = [
-        ["QTD", "DESCRIÇÃO", "VLR. TOTAL", "ENC.", "ENTR."]
-    ]
-
-    # --- [NOVO] Símbolo do checkbox ---
+    dados_tabela = [["QTD", "DESCRIÇÃO", "VLR. TOTAL", "ENC.", "ENTR."]]
     checkbox = Paragraph("▢", style_checkbox)
 
     for _, row in df_livro.iterrows():
         desc = Paragraph(str(row[col_desc_real]), style_normal_left)
         qtd = Paragraph(str(int(row["QTD"])), style_normal_center)
         total_par = Paragraph(f"R$ {row['Subtotal']:,.2f}", style_normal_center)
-        
-        # --- [NOVO] Adiciona os checkboxes em branco ---
         dados_tabela.append([qtd, desc, total_par, checkbox, checkbox])
 
-    # --- [NOVO] Larguras de coluna ajustadas ---
-    # Largura das colunas [QTD, DESC, VLR, ENC, ENTR]
     tabela = Table(dados_tabela, colWidths=[45, 295, 80, 35, 35]) 
-    
-    tabela.setStyle(
-        TableStyle(
-            [
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor(cor_principal)),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                ('FONTNAME', (0, 0), (-1, 0), "Arial-Bold"),
-                ('ALIGN', (0, 0), (-1, 0), "CENTER"), # Cabeçalho centralizado
-                ('VALIGN', (0, 0), (-1, -1), "MIDDLE"),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('ALIGN', (1, 1), (1, -1), "LEFT"),  # Descrição à esquerda
-                # Alinha todas as outras colunas (QTD, VLR, ENC, ENTR) ao centro
-                ('ALIGN', (0, 1), (0, -1), "CENTER"),
-                ('ALIGN', (2, 1), (-1, -1), "CENTER"), 
-                ('FONTSIZE', (0, 1), (-1, -1), 9), 
-                ('TOPPADDING', (0, 0), (-1, -1), 1), 
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 1), 
-                ('FONTNAME', (0, 1), (-1, -1), 'Arial')
-            ]
-        )
-    )
+    tabela.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor(cor_principal)),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white), ('FONTNAME', (0, 0), (-1, 0), "Arial-Bold"),
+        ('ALIGN', (0, 0), (-1, 0), "CENTER"), ('VALIGN', (0, 0), (-1, -1), "MIDDLE"),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey), ('ALIGN', (1, 1), (1, -1), "LEFT"),
+        ('ALIGN', (0, 1), (0, -1), "CENTER"), ('ALIGN', (2, 1), (-1, -1), "CENTER"), 
+        ('FONTSIZE', (0, 1), (-1, -1), 9), ('TOPPADDING', (0, 0), (-1, -1), 1), 
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 1), ('FONTNAME', (0, 1), (-1, -1), 'Arial')
+    ]))
     elementos += [tabela, Spacer(1, 12)]
 
-    # --- 4. Total ---
     total_paragraph = Paragraph(f"<b>Total Geral:</b> R$ {total_livro:,.2f}", style_total)
     elementos.append(total_paragraph)
     
-    # --- [NOVO] Observação Fixa ---
-    elementos.append(Spacer(1, 0.5*cm)) # Espaçador
+    elementos.append(Spacer(1, 0.5*cm))
     obs_fixa_texto = "Prazo de encomenda é aproximadamente 15 dias úteis e sujeito a disponibilidade do livro no fornecedor."
     elementos.append(Paragraph(obs_fixa_texto, style_obs_fixa))
-    # --- [FIM DA MUDANÇA] ---
     
     return elementos
 
 
 def gerar_pedido_livro_pdf_reportlab(caminho_logo, cliente, telefone, df_livro, total_livro, obs_livro):
-    """Monta um PDF de Pedido de Livro com 2 vias na mesma folha A4."""
+    """Monta um PDF de Pedido de Livro com 2 vias (retorna BytesIO)."""
     
-    nome_cliente_sanitizado = sanitizar_nome_arquivo(cliente)
-    nome_pdf = f"Pedido Livro - {nome_cliente_sanitizado}.pdf"
-    
-    caminho_pdf = os.path.join(CAMINHO_SALVAR_LIVRO_PDF, nome_pdf)
-
+    pdf_buffer = BytesIO()
     doc = SimpleDocTemplate(
-        caminho_pdf,
+        pdf_buffer,
         pagesize=A4, 
         rightMargin=1.5*cm, leftMargin=1.5*cm, topMargin=1.5*cm, bottomMargin=1.5*cm
     )
@@ -786,21 +692,8 @@ def gerar_pedido_livro_pdf_reportlab(caminho_logo, cliente, telefone, df_livro, 
     altura_frame = (altura_pagina - 3*cm) / 2 
     largura_frame = largura_pagina - 3*cm
     
-    frame_cima = Frame(
-        x1=doc.leftMargin, 
-        y1=doc.bottomMargin + altura_frame + 1.5*cm,
-        width=largura_frame, 
-        height=altura_frame, 
-        id='frame_cima'
-    )
-    
-    frame_baixo = Frame(
-        x1=doc.leftMargin, 
-        y1=doc.bottomMargin,
-        width=largura_frame, 
-        height=altura_frame, 
-        id='frame_baixo'
-    )
+    frame_cima = Frame(x1=doc.leftMargin, y1=doc.bottomMargin + altura_frame + 1.5*cm, width=largura_frame, height=altura_frame, id='frame_cima')
+    frame_baixo = Frame(x1=doc.leftMargin, y1=doc.bottomMargin, width=largura_frame, height=altura_frame, id='frame_baixo')
     
     def linha_divisoria(canvas, doc):
         canvas.saveState()
@@ -810,11 +703,7 @@ def gerar_pedido_livro_pdf_reportlab(caminho_logo, cliente, telefone, df_livro, 
         canvas.line(doc.leftMargin, meio_pagina_y, largura_pagina - doc.rightMargin, meio_pagina_y)
         canvas.restoreState()
 
-    template_duplo = PageTemplate(
-        id='DuasVias', 
-        frames=[frame_cima, frame_baixo],
-        onPage=linha_divisoria
-    )
+    template_duplo = PageTemplate(id='DuasVias', frames=[frame_cima, frame_baixo], onPage=linha_divisoria)
     doc.addPageTemplates([template_duplo])
 
     telefone_formatado = formatar_telefone(telefone)
@@ -826,11 +715,9 @@ def gerar_pedido_livro_pdf_reportlab(caminho_logo, cliente, telefone, df_livro, 
     historia_completa = elementos_uma_via + [FrameBreak()] + elementos_uma_via
     
     doc.build(historia_completa)
-    abrir_arquivo(caminho_pdf)
-    
-    return caminho_pdf
+    pdf_buffer.seek(0)
+    return pdf_buffer.getvalue()
 
-# --- FIM DA NOVA FUNÇÃO ---
 
 def converter_html_para_pdf(html_string):
     """Converte uma string de HTML em bytes de PDF."""
@@ -845,53 +732,22 @@ def converter_html_para_pdf(html_string):
 # --- FIM DAS FUNÇÕES PDF ---
 
 
-# --- Interface Streamlit ---
-st.set_page_config(page_title="Orçamento Escolar", layout="wide")
-st.image(LOGO_PATH, width=150)
-st.title("Editor de Orçamento Escolar 📚")
-
-# --- MUDANÇA: Função de limpeza CORRIGIDA (5 CESTAS) ---
-def limpar_state_para_novo_modo():
-    if st.session_state.get("carregando_rascunho", False):
-        st.session_state.carregando_rascunho = False 
-        return
-
-    st.session_state.df_material = pd.DataFrame()
-    st.session_state.df_vale = pd.DataFrame()
-    st.session_state.df_livro = pd.DataFrame() 
-    st.session_state.df_integral = pd.DataFrame() # <-- MUDANÇA (5 CESTAS)
-    st.session_state.df_bilingue = pd.DataFrame() # <-- MUDANÇA (5 CESTAS)
-    st.session_state.obs_nao_trabalhamos = ""
-    st.session_state.obs_para_escolher = ""
-    st.session_state.obs_outras = ""
-    st.session_state.escola_manual = ""
-    st.session_state.serie_manual = ""
-    st.session_state.aba_anterior = None
-    st.session_state.escola_anterior = None
-    st.session_state.vale_aluno = ""
-    st.session_state.vale_responsavel = ""
-    st.session_state.vale_telefone = ""
-    st.session_state.nome_cliente = "" 
-    st.session_state.livro_cliente = "" 
-    st.session_state.livro_telefone = "" 
-    st.session_state.livro_obs = "" 
-# --- FIM DA MUDANÇA ---
-
-# --- NOVAS FUNÇÕES DO GOOGLE (MODO BATCH) ---
+# --- FUNÇÕES GOOGLE (MODIFICADAS PARA NUVEM) ---
 @st.cache_resource
 def get_google_creds():
-    creds = None
-    token_file = os.path.join(CAMINHO_BASE, 'token.json') 
-    if os.path.exists(token_file):
-        creds = Credentials.from_authorized_user_file(token_file, SCOPES)
+    """Autentica com o Google usando st.secrets."""
+    # O st.secrets["google_creds"] deve conter o JSON do client_secret.json
+    # O Streamlit Cloud gerará e armazenará o token.json automaticamente
+    creds_json = st.secrets["google_creds"]
+    creds = Credentials.from_authorized_user_info(creds_json, SCOPES)
+    
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open(token_file, 'w') as token:
-            token.write(creds.to_json())
+            # Este é o fluxo interativo, só vai rodar na primeira vez no servidor
+            flow = InstalledAppFlow.from_client_secrets_info(creds_json, SCOPES)
+            creds = flow.run_local_server(port=0) # O Streamlit Cloud lida com isso
     return creds
 
 @st.cache_resource
@@ -905,32 +761,75 @@ def get_google_services(_creds):
         return None, None
 
 def find_file_in_drive(drive_service, pasta_id, nome_arquivo):
+    """Procura um arquivo pelo nome exato dentro de uma pasta específica."""
     query = f"name='{nome_arquivo}' and '{pasta_id}' in parents and trashed=false"
     response = drive_service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
     files = response.get('files', [])
     return files[0].get('id') if files else None
 
+# --- FUNÇÃO ATUALIZADA (LÊ DO DRIVE) ---
 @st.cache_data(ttl=600)
-def build_full_database(_base_dados):
-    lista_completa = []
-    arquivos_escola = [f for f in os.listdir(CAMINHO_BASE) if f.endswith(".xlsx") and f != ARQUIVO_BASE and not f.startswith("~$")]
+def build_full_database(_drive_service, _base_dados):
+    """Varre todos os Excels no Google Drive para criar um 'Super DF' de busca."""
     
-    for nome_arquivo_excel in arquivos_escola:
+    lista_completa = []
+    
+    try:
+        # 1. Listar todos os arquivos na pasta
+        query = f"'{PASTA_DRIVE_PLANILHAS_ID}' in parents and mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' and trashed=false"
+        response = _drive_service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
+        files = response.get('files', [])
+        
+        if not files:
+            st.warning("Nenhuma planilha de escola encontrada no Google Drive.")
+            return pd.DataFrame()
+
+    except Exception as e:
+        st.error(f"Erro ao listar arquivos do Google Drive: {e}")
+        return pd.DataFrame()
+
+    st.toast(f"Encontrados {len(files)} arquivos de escola. Iniciando busca global...")
+    progress_bar = st.progress(0.0)
+    
+    for i, file in enumerate(files):
+        nome_arquivo_excel = file.get('name')
+        if nome_arquivo_excel == ARQUIVO_BASE or nome_arquivo_excel.startswith("~$"):
+            continue
+            
+        progress_bar.progress((i+1) / len(files), text=f"Lendo: {nome_arquivo_excel}")
+
         try:
-            caminho_planilha_escola = os.path.join(CAMINHO_BASE, nome_arquivo_excel)
+            file_buffer = download_excel_bytes(_drive_service, PASTA_DRIVE_PLANILHAS_ID, nome_arquivo_excel)
+            if file_buffer is None:
+                continue
+                
             nome_escola_limpo = nome_arquivo_excel.split('.')[0].split('_')[0]
-            abas = pd.ExcelFile(caminho_planilha_escola).sheet_names
+            # Carrega o arquivo em memória para pegar os nomes das abas
+            xl = pd.ExcelFile(file_buffer, engine='openpyxl')
+            abas = xl.sheet_names
             
             for nome_aba in abas:
-                df_itens = carregar_itens(caminho_planilha_escola, nome_aba)
-                if df_itens.empty:
-                    continue
+                # Re-lê o buffer para cada aba (necessário pois pd.read_excel fecha o buffer)
+                file_buffer_aba = download_excel_bytes(_drive_service, PASTA_DRIVE_PLANILHAS_ID, nome_arquivo_excel)
+                df_itens = pd.read_excel(file_buffer_aba, sheet_name=nome_aba, header=HEADER_DA_PLANILHA, dtype=str, engine='openpyxl')
+                
+                # O carregar_itens() faz muita validação, vamos simplificar aqui
+                df_itens.columns = [normalizar_texto(col) for col in df_itens.columns.astype(str)]
+                if "COD" not in df_itens.columns or "TIPO" not in df_itens.columns:
+                    continue # Pula aba mal formatada
+                
+                df_itens = df_itens.rename(columns={
+                    [c for c in df_itens.columns if "COD" in c][0]: "COD",
+                    [c for c in df_itens.columns if "TIPO" in c][0]: "TIPO"
+                })
+                df_itens["COD"] = df_itens["COD"].astype(str).str.strip().str.upper()
+                if "QTD" not in df_itens.columns: df_itens["QTD"] = 1
                 
                 df_itens['QTD'] = pd.to_numeric(df_itens['QTD'], errors='coerce').fillna(0)
 
                 for _, row in df_itens.iterrows():
-                    cod = row['COD'].upper()
-                    info_base = _base_dados.get(cod) 
+                    cod = row['COD']
+                    info_base = _base_dados.get(cod)
                     
                     if info_base:
                         desc_planilha = row.get("DESCRICAO", "")
@@ -947,23 +846,24 @@ def build_full_database(_base_dados):
                             'COD': cod,
                             'Descrição': descricao_final,
                             'QTD': int(row['QTD']),
-                            'TIPO': row['TIPO']
+                            'TIPO': normalizar_texto(row['TIPO'])
                         })
         except Exception as e:
-            print(f"ALERTA: Falha ao ler {nome_arquivo_excel}: {e}")
+            print(f"ALERTA: Falha ao ler {nome_arquivo_excel} do Drive: {e}")
             
+    progress_bar.empty()
     return pd.DataFrame(lista_completa)
 
-
+# --- FUNÇÃO ATUALIZADA (LÊ E ESCREVE NO DRIVE) ---
 def run_batch_update(base_dados, sheets_service, drive_service):
     planilha_mestra = None
     aba_mestra = None
     try:
         planilha_mestra = sheets_service.open_by_key(PLANILHA_MESTRE_ID)
-        aba_mestra = planilha_mestra.sheet1 
+        aba_mestra = planilha_mestra.sheet1
         st.success("Planilha Mestra do Make.com aberta!")
     except Exception as e:
-        st.error(f"Não consegui abrir a Planilha Mestra (ID: {PLANILHA_MESTRE_ID}). Verifique o ID e se você a compartilhou. Erro: {e}")
+        st.error(f"Não consegui abrir a Planilha Mestra (ID: {PLANILHA_MESTRE_ID}). Erro: {e}")
         return
 
     try:
@@ -975,38 +875,61 @@ def run_batch_update(base_dados, sheets_service, drive_service):
             if escola and serie:
                 mapa_planilha[(escola, serie)] = i + 2 
     except Exception as e:
-        st.error(f"Não consegui ler os dados da Planilha Mestra. Verifique os nomes dos cabeçalhos ('Escola', 'Série'). Erro: {e}")
+        st.error(f"Não consegui ler os dados da Planilha Mestra. Erro: {e}")
         return
 
     st.info(f"Encontrei {len(mapa_planilha)} linhas de Escola/Série na Planilha Mestra.")
     
     logo_base64 = converter_imagem_base64(LOGO_PATH)
-    data_validade = extrair_data_validade()
+    data_validade = extrair_data_validade(drive_service, PASTA_DRIVE_PLANILHAS_ID)
     
-    arquivos_escola = [f for f in os.listdir(CAMINHO_BASE) if f.endswith(".xlsx") and f != ARQUIVO_BASE and not f.startswith("~$")]
-    
+    try:
+        query = f"'{PASTA_DRIVE_PLANILHAS_ID}' in parents and mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' and trashed=false"
+        response = drive_service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
+        arquivos_escola = response.get('files', [])
+    except Exception as e:
+        st.error(f"Erro ao listar arquivos do Google Drive: {e}")
+        return
+
     progress_bar = st.progress(0.0)
     status_text = st.empty()
     arquivos_processados = 0
     
-    for i, nome_arquivo_excel in enumerate(arquivos_escola):
-        caminho_planilha_escola = os.path.join(CAMINHO_BASE, nome_arquivo_excel)
+    for i, file in enumerate(arquivos_escola):
+        nome_arquivo_excel = file.get('name')
+        if nome_arquivo_excel == ARQUIVO_BASE or nome_arquivo_excel.startswith("~$"):
+            continue
+
         nome_escola_limpo = nome_arquivo_excel.split('.')[0].split('_')[0]
-        
         status_text.text(f"Processando: {nome_escola_limpo} ({i+1}/{len(arquivos_escola)})...")
         
         try:
-            abas = pd.ExcelFile(caminho_planilha_escola).sheet_names
+            file_buffer = download_excel_bytes(drive_service, PASTA_DRIVE_PLANILHAS_ID, nome_arquivo_excel)
+            if file_buffer is None:
+                continue
+
+            xl = pd.ExcelFile(file_buffer, engine='openpyxl')
+            abas = xl.sheet_names
             
             for nome_aba in abas:
-                df_itens = carregar_itens(caminho_planilha_escola, nome_aba)
-                if df_itens.empty:
+                # Recarrega os bytes, pois o pandas/openpyxl consome o buffer
+                file_buffer_aba = download_excel_bytes(drive_service, PASTA_DRIVE_PLANILHAS_ID, nome_arquivo_excel)
+                df_itens = pd.read_excel(file_buffer_aba, sheet_name=nome_aba, header=HEADER_DA_PLANILHA, dtype=str, engine='openpyxl')
+                
+                # Validação simplificada
+                df_itens.columns = [normalizar_texto(col) for col in df_itens.columns.astype(str)]
+                if "COD" not in df_itens.columns or "TIPO" not in df_itens.columns:
                     continue
                 
                 col_tipo = [c for c in df_itens.columns if "TIPO" in c][0]
-                df_itens[col_tipo] = df_itens[col_tipo].astype(str).str.upper()
+                df_itens = df_itens.rename(columns={
+                    [c for c in df_itens.columns if "COD" in c][0]: "COD",
+                    col_tipo: "TIPO"
+                })
+                if "QTD" not in df_itens.columns: df_itens["QTD"] = 1
+                df_itens["COD"] = df_itens["COD"].astype(str).str.strip() 
+                df_itens[col_tipo] = df_itens[col_tipo].astype(str).apply(normalizar_texto)
                 
-                # --- MUDANÇA (5 CESTAS) ---
                 tipos_livro = ["LIVRO", "DICIONARIO", "LIVROS", "DICIONÁRIO"]
                 tipos_integral = ["INTEGRAL"]
                 tipos_bilingue = ["BILINGUE", "BILINGÜE"]
@@ -1027,7 +950,6 @@ def run_batch_update(base_dados, sheets_service, drive_service):
                 df_livro_final, _, total_livro, _ = configurar_e_calcular_tabela(df_livro, base_de_dados)
                 df_integral_final, _, total_integral, _ = configurar_e_calcular_tabela(df_integral, base_de_dados)
                 df_bilingue_final, _, total_bilingue, _ = configurar_e_calcular_tabela(df_bilingue, base_de_dados)
-                # --- FIM DA MUDANÇA ---
                 
                 totais = {
                     "material": total_material, "vale": total_vale, "livro": total_livro,
@@ -1035,9 +957,11 @@ def run_batch_update(base_dados, sheets_service, drive_service):
                     "geral": total_material + total_vale + total_livro + total_integral + total_bilingue
                 }
                 
-                wb_escola = openpyxl.load_workbook(caminho_planilha_escola, data_only=True)
+                # Re-download para o openpyxl
+                file_buffer_obs = download_excel_bytes(drive_service, PASTA_DRIVE_PLANILHAS_ID, nome_arquivo_excel)
+                wb_escola = openpyxl.load_workbook(file_buffer_obs, data_only=True)
                 ws_escola = wb_escola[nome_aba]
-                nt_str, pe_str = extrair_observacoes_iniciais(ws_escola)
+                nt_str, pe_str = extrair_observacoes_iniciais(drive_service, PASTA_DRIVE_PLANILHAS_ID, nome_arquivo_excel, nome_aba)
                 
                 html_string = gerar_html_para_pdf(
                     logo_base64, nome_escola_limpo, nome_aba, "Orçamento Padrão", data_validade,
@@ -1089,16 +1013,120 @@ def run_batch_update(base_dados, sheets_service, drive_service):
 # --- FIM DAS FUNÇÕES DO GOOGLE ---
 
 
-base_de_dados, lista_para_busca = carregar_base_dados()
+# --- Interface Streamlit ---
+st.set_page_config(page_title="Orçamento Escolar", layout="wide")
+try:
+    st.image(LOGO_PATH, width=150)
+except Exception as e:
+    st.error(f"Não foi possível carregar o Logo.jpg. Verifique se ele está no repositório GitHub. Erro: {e}")
 
-# --- MUDANÇA: Lógica de inicialização do State (5 CESTAS) ---
+st.title("Editor de Orçamento Escolar 📚")
+
+def limpar_state_para_novo_modo():
+    if st.session_state.get("carregando_rascunho", False):
+        st.session_state.carregando_rascunho = False 
+        return
+
+    st.session_state.df_material = pd.DataFrame()
+    st.session_state.df_vale = pd.DataFrame()
+    st.session_state.df_livro = pd.DataFrame() 
+    st.session_state.df_integral = pd.DataFrame() 
+    st.session_state.df_bilingue = pd.DataFrame() 
+    st.session_state.obs_nao_trabalhamos = ""
+    st.session_state.obs_para_escolher = ""
+    st.session_state.obs_outras = ""
+    st.session_state.escola_manual = ""
+    st.session_state.serie_manual = ""
+    st.session_state.aba_anterior = None
+    st.session_state.escola_anterior = None
+    st.session_state.vale_aluno = ""
+    st.session_state.vale_responsavel = ""
+    st.session_state.vale_telefone = ""
+    st.session_state.nome_cliente = "" 
+    st.session_state.livro_cliente = "" 
+    st.session_state.livro_telefone = "" 
+    st.session_state.livro_obs = "" 
+
+
+# --- NOVA INICIALIZAÇÃO (LENDO DO GOOGLE DRIVE) ---
+# SUBSTITUA A FUNÇÃO ANTIGA "autenticar_google" POR ESTA VERSÃO:
+
+@st.cache_resource
+def autenticar_google():
+    """Autentica com Google usando o fluxo OAuth do Streamlit (client_secret.json)."""
+    try:
+        if "google_creds" not in st.secrets:
+            st.error("Erro Crítico: 'google_creds' (client_secret.json) não encontrado nos Segredos do Streamlit.")
+            st.info("Por favor, cole o conteúdo do seu client_secret.json (o primeiro que você criou) para o st.secrets.")
+            return None, None
+
+        # O Streamlit Cloud gerencia o token.json automaticamente.
+        # Esta é a forma correta de usar o InstalledAppFlow
+        flow = InstalledAppFlow.from_client_secrets_info(
+            st.secrets["google_creds"],
+            SCOPES,
+            redirect_uri='urn:ietf:wg:oauth:2.0:oob' # Essencial para o Streamlit Cloud
+        )
+
+        # O Streamlit Cloud lida com este fluxo magicamente
+        # Ele vai pausar o app e te dar um link para autenticar no log
+        creds = flow.run_console()
+        
+        drive_service = build('drive', 'v3', credentials=creds)
+        sheets_service = gspread.authorize(creds)
+
+        return drive_service, sheets_service
+        
+    except Exception as e:
+        st.error(f"Erro na autenticação do Google: {e}")
+        st.info("O Streamlit tentará abrir uma aba de autenticação. Por favor, autorize e recarregue a página.")
+        st.exception(e)
+        return None, None
+# --- FIM DA SUBSTITUIÇÃO ---
+
+        return drive_service, sheets_service
+        
+    except Exception as e:
+        st.error(f"Erro na autenticação do Google: {e}")
+        st.exception(e)
+        return None, None
+
+drive_service, sheets_service = autenticar_google()
+
+if drive_service:
+    # Carrega a base de dados principal
+    base_de_dados, lista_para_busca = carregar_base_dados(drive_service, PASTA_DRIVE_PLANILHAS_ID)
+    
+    # Carrega a lista de escolas do Drive
+    @st.cache_data(ttl=600)
+    def get_school_list(drive_service, folder_id):
+        try:
+            query = f"'{folder_id}' in parents and mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' and trashed=false"
+            response = drive_service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
+            files = response.get('files', [])
+            
+            school_files = [f.get('name') for f in files if f.get('name') != ARQUIVO_BASE and not f.get('name').startswith("~$")]
+            return sorted([f.replace(".xlsx", "") for f in school_files])
+        except Exception as e:
+            st.error(f"Não foi possível carregar a lista de escolas do Drive: {e}")
+            return []
+            
+    opcoes_escolas = get_school_list(drive_service, PASTA_DRIVE_PLANILHAS_ID)
+    
+else:
+    st.error("Autenticação do Google falhou. O aplicativo não pode carregar os dados das planilhas.")
+    base_de_dados, lista_para_busca = None, []
+    opcoes_escolas = []
+# --- FIM DA NOVA INICIALIZAÇÃO ---
+
+
 if 'orcamento_mode' not in st.session_state:
     st.session_state.orcamento_mode = "Novo Orçamento"
 if 'df_material' not in st.session_state: st.session_state.df_material = pd.DataFrame()
 if 'df_vale' not in st.session_state: st.session_state.df_vale = pd.DataFrame()
 if 'df_livro' not in st.session_state: st.session_state.df_livro = pd.DataFrame() 
-if 'df_integral' not in st.session_state: st.session_state.df_integral = pd.DataFrame() # <-- MUDANÇA (5 CESTAS)
-if 'df_bilingue' not in st.session_state: st.session_state.df_bilingue = pd.DataFrame() # <-- MUDANÇA (5 CESTAS)
+if 'df_integral' not in st.session_state: st.session_state.df_integral = pd.DataFrame() 
+if 'df_bilingue' not in st.session_state: st.session_state.df_bilingue = pd.DataFrame() 
 if 'aba_anterior' not in st.session_state: st.session_state.aba_anterior = None
 if 'escola_anterior' not in st.session_state: st.session_state.escola_anterior = None
 if 'obs_nao_trabalhamos' not in st.session_state: st.session_state.obs_nao_trabalhamos = ""
@@ -1114,7 +1142,6 @@ if 'carregando_rascunho' not in st.session_state: st.session_state.carregando_ra
 if 'livro_cliente' not in st.session_state: st.session_state.livro_cliente = ""
 if 'livro_telefone' not in st.session_state: st.session_state.livro_telefone = ""
 if 'livro_obs' not in st.session_state: st.session_state.livro_obs = ""
-# --- FIM DA MUDANÇA ---
 
 
 if "next_mode" in st.session_state:
@@ -1132,75 +1159,19 @@ escola_final = None
 serie_final = None
 pode_carregar = False 
 
-# --- MUDANÇA: lógica "Carregar Rascunho" atualizada (5 CESTAS) ---
+# --- RASCUNHOS NÃO SÃO SUPORTADOS NA NUVEM DESTA FORMA ---
 if st.session_state.orcamento_mode == "Carregar Rascunho":
     st.header("📂 Carregar Rascunho Salvo")
-    try:
-        arquivos_rascunho = [f for f in os.listdir(CAMINHO_SALVAR_RASCUNHOS) if f.endswith(".json")]
-        if not arquivos_rascunho:
-            st.warning("Nenhum rascunho salvo encontrado na pasta 'Rascunhos Salvos'.")
-            pode_carregar = False
-        else:
-            arquivos_rascunho_ordenados = sorted(
-                arquivos_rascunho, 
-                key=lambda f: os.path.getmtime(os.path.join(CAMINHO_SALVAR_RASCUNHOS, f)), 
-                reverse=True
-            )
-            
-            rascunho_selecionado = st.selectbox("Selecione um rascunho para carregar:", options=arquivos_rascunho_ordenados, index=None)
-            
-            if rascunho_selecionado:
-                if st.button("Carregar Rascunho", type="primary"):
-                    caminho_completo = os.path.join(CAMINHO_SALVAR_RASCUNHOS, rascunho_selecionado)
-                    try:
-                        with open(caminho_completo, 'r', encoding='utf-8') as f:
-                            data = json.load(f)
-                        
-                        # --- CORREÇÃO (5 CESTAS) ---
-                        df_mat_temp = pd.DataFrame.from_records(data.get('material', []))
-                        df_vale_temp = pd.DataFrame.from_records(data.get('vale', []))
-                        df_livro_temp = pd.DataFrame.from_records(data.get('livro', [])) 
-                        df_integral_temp = pd.DataFrame.from_records(data.get('integral', [])) 
-                        df_bilingue_temp = pd.DataFrame.from_records(data.get('bilingue', [])) 
-                        
-                        st.session_state.df_material, _, _, _ = configurar_e_calcular_tabela(df_mat_temp, base_de_dados)
-                        st.session_state.df_vale, _, _, _ = configurar_e_calcular_tabela(df_vale_temp, base_de_dados)
-                        st.session_state.df_livro, _, _, _ = configurar_e_calcular_tabela(df_livro_temp, base_de_dados) 
-                        st.session_state.df_integral, _, _, _ = configurar_e_calcular_tabela(df_integral_temp, base_de_dados) 
-                        st.session_state.df_bilingue, _, _, _ = configurar_e_calcular_tabela(df_bilingue_temp, base_de_dados) 
-                        # --- FIM DA CORREÇÃO ---
-                        
-                        st.session_state.obs_nao_trabalhamos = data.get('obs_nt', "")
-                        st.session_state.obs_para_escolher = data.get('obs_pe', "")
-                        st.session_state.obs_outras = data.get('obs_outras', "")
-                        
-                        st.session_state.escola_manual = data.get('escola', "")
-                        st.session_state.serie_manual = data.get('serie', "")
-                        
-                        st.session_state.vale_aluno = data.get('vale_aluno', "")
-                        st.session_state.vale_responsavel = data.get('vale_responsavel', "")
-                        st.session_state.vale_telefone = data.get('vale_telefone', "")
-                        
-                        st.session_state.nome_cliente = data.get('nome_cliente', "")
-                        
-                        st.session_state.carregando_rascunho = True
-                        st.session_state.next_mode = "Novo Orçamento"
-                        st.rerun()
-                        
-                    except Exception as e:
-                        st.error(f"Erro ao ler o arquivo de rascunho: {e}")
-                        st.exception(e) 
-                        
-    except Exception as e:
-        st.error(f"Não foi possível acessar a pasta de rascunhos: {e}")
-    
-    pode_carregar = False 
+    st.error("O carregamento de rascunhos salvos localmente não é suportado na versão em nuvem.")
+    st.info("Para salvar um orçamento, use o modo 'Novo Orçamento' ou 'Orçamento Escola Pronto' e gere o PDF final.")
+    pode_carregar = False
 # --- FIM DA MUDANÇA ---
     
 elif st.session_state.orcamento_mode == "Orçamento Escola Pronto":
-    arquivos_escola = [f for f in os.listdir(CAMINHO_BASE) if f.endswith(".xlsx") and f != ARQUIVO_BASE and not f.startswith("~$")]
-    opcoes_escolas = sorted([f.replace(".xlsx", "") for f in arquivos_escola])
-    
+    if not drive_service or not opcoes_escolas:
+        st.error("Serviço do Google Drive não está disponível ou nenhuma planilha de escola foi encontrada.")
+        st.stop()
+        
     escola_selecionada = st.selectbox(
         "Digite o nome da escola", 
         options=opcoes_escolas, 
@@ -1210,11 +1181,18 @@ elif st.session_state.orcamento_mode == "Orçamento Escola Pronto":
     )
 
     if escola_selecionada:
-        caminho_arquivo = os.path.join(CAMINHO_BASE, escola_selecionada + ".xlsx")
+        nome_arquivo = escola_selecionada + ".xlsx"
         try:
-            abas = pd.ExcelFile(caminho_arquivo).sheet_names
+            # --- MUDANÇA (LÊ DO DRIVE) ---
+            file_buffer = download_excel_bytes(drive_service, PASTA_DRIVE_PLANILHAS_ID, nome_arquivo)
+            if file_buffer is None:
+                st.error(f"Não foi possível carregar o arquivo {nome_arquivo} do Google Drive.")
+                st.stop()
+            xl = pd.ExcelFile(file_buffer, engine='openpyxl')
+            abas = xl.sheet_names
+            # --- FIM DA MUDANÇA ---
         except Exception as e:
-            st.error(f"Não foi possível ler o arquivo da escola: {e}"); st.stop()
+            st.error(f"Não foi possível ler as abas do arquivo '{nome_arquivo}': {e}"); st.stop()
             
         aba_selecionada = st.selectbox("Escolha a série", abas)
         
@@ -1225,12 +1203,12 @@ elif st.session_state.orcamento_mode == "Orçamento Escola Pronto":
 
             if (escola_selecionada != st.session_state.escola_anterior) or (aba_selecionada != st.session_state.aba_anterior):
                 st.toast(f"Carregando dados para {escola_selecionada} - {aba_selecionada}...")
-                df_itens = carregar_itens(caminho_arquivo, aba_selecionada)
+                
+                # --- MUDANÇA (LÊ DO DRIVE) ---
+                df_itens = carregar_itens(drive_service, PASTA_DRIVE_PLANILHAS_ID, nome_arquivo, aba_selecionada)
                 
                 if not df_itens.empty:
                     col_tipo = [c for c in df_itens.columns if "TIPO" in c][0]
-                    
-                    # --- INÍCIO DA MUDANÇA (5 CESTAS) ---
                     df_itens[col_tipo] = df_itens[col_tipo].astype(str).str.upper()
                     
                     tipos_livro = ["LIVRO", "DICIONARIO", "LIVROS", "DICIONÁRIO"]
@@ -1241,7 +1219,6 @@ elif st.session_state.orcamento_mode == "Orçamento Escola Pronto":
                     st.session_state.df_vale = df_itens[df_itens[col_tipo] == "VALE"]
                     st.session_state.df_integral = df_itens[df_itens[col_tipo].isin(tipos_integral)]
                     st.session_state.df_bilingue = df_itens[df_itens[col_tipo].isin(tipos_bilingue)]
-                    
                     st.session_state.df_material = df_itens[
                         (~df_itens[col_tipo].isin(tipos_livro)) &
                         (df_itens[col_tipo] != "VALE") &
@@ -1254,17 +1231,12 @@ elif st.session_state.orcamento_mode == "Orçamento Escola Pronto":
                     st.session_state.df_livro, _, _, _ = configurar_e_calcular_tabela(st.session_state.df_livro, base_de_dados)
                     st.session_state.df_integral, _, _, _ = configurar_e_calcular_tabela(st.session_state.df_integral, base_de_dados)
                     st.session_state.df_bilingue, _, _, _ = configurar_e_calcular_tabela(st.session_state.df_bilingue, base_de_dados)
-                    # --- FIM DA MUDANÇA ---
                 else:
                     st.session_state.df_material = pd.DataFrame(); st.session_state.df_vale = pd.DataFrame(); st.session_state.df_livro = pd.DataFrame(); st.session_state.df_integral = pd.DataFrame(); st.session_state.df_bilingue = pd.DataFrame()
                 
-                try:
-                    wb = openpyxl.load_workbook(caminho_arquivo, data_only=True)
-                    ws = wb[aba_selecionada]
-                    nt, pe = extrair_observacoes_iniciais(ws)
-                    st.session_state.obs_nao_trabalhamos = nt; st.session_state.obs_para_escolher = pe; st.session_state.obs_outras = "" 
-                except Exception as e:
-                    st.warning(f"Não foi possível carregar as observações: {e}")
+                # --- MUDANÇA (LÊ DO DRIVE) ---
+                nt, pe = extrair_observacoes_iniciais(drive_service, PASTA_DRIVE_PLANILHAS_ID, nome_arquivo, aba_selecionada)
+                st.session_state.obs_nao_trabalhamos = nt; st.session_state.obs_para_escolher = pe; st.session_state.obs_outras = "" 
 
                 st.session_state.escola_anterior = escola_selecionada
                 st.session_state.aba_anterior = aba_selecionada
@@ -1285,8 +1257,10 @@ elif st.session_state.orcamento_mode == "Novo Orçamento":
 elif st.session_state.orcamento_mode == "Gerador de Vale":
     st.header("📄 Gerador de Vale Avulso")
     
-    arquivos_escola = [f for f in os.listdir(CAMINHO_BASE) if f.endswith(".xlsx") and f != ARQUIVO_BASE and not f.startswith("~$")]
-    opcoes_escolas = sorted([f.replace(".xlsx", "") for f in arquivos_escola])
+    if not drive_service or not opcoes_escolas:
+        st.error("Serviço do Google Drive não está disponível ou nenhuma planilha de escola foi encontrada.")
+        st.stop()
+        
     escola_selecionada = st.selectbox(
         "Selecione a escola", 
         options=opcoes_escolas, 
@@ -1295,12 +1269,20 @@ elif st.session_state.orcamento_mode == "Gerador de Vale":
         key="escola_selecionada_vale" 
     )
     
+    aba_selecionada = None
     if escola_selecionada:
-        caminho_arquivo = os.path.join(CAMINHO_BASE, escola_selecionada + ".xlsx")
+        nome_arquivo = escola_selecionada + ".xlsx"
         try:
-            abas = pd.ExcelFile(caminho_arquivo).sheet_names
+            # --- MUDANÇA (LÊ DO DRIVE) ---
+            file_buffer = download_excel_bytes(drive_service, PASTA_DRIVE_PLANILHAS_ID, nome_arquivo)
+            if file_buffer is None:
+                st.error(f"Não foi possível carregar o arquivo {nome_arquivo} do Google Drive.")
+                st.stop()
+            xl = pd.ExcelFile(file_buffer, engine='openpyxl')
+            abas = xl.sheet_names
+            # --- FIM DA MUDANÇA ---
         except Exception as e:
-            st.error(f"Não foi possível ler o arquivo da escola: {e}"); st.stop()
+            st.error(f"Não foi possível ler as abas do arquivo '{nome_arquivo}': {e}"); st.stop()
             
         aba_selecionada = st.selectbox("Escolha a série", abas)
         
@@ -1311,7 +1293,7 @@ elif st.session_state.orcamento_mode == "Gerador de Vale":
 
             if (escola_selecionada != st.session_state.escola_anterior) or (aba_selecionada != st.session_state.aba_anterior):
                 st.toast(f"Carregando dados para {escola_selecionada} - {aba_selecionada}...")
-                df_itens = carregar_itens(caminho_arquivo, aba_selecionada)
+                df_itens = carregar_itens(drive_service, PASTA_DRIVE_PLANILHAS_ID, nome_arquivo, aba_selecionada)
                 
                 if not df_itens.empty:
                     col_tipo = [c for c in df_itens.columns if "TIPO" in c][0]
@@ -1335,12 +1317,13 @@ elif st.session_state.orcamento_mode == "Gerador de Vale":
         escola_final = "Não selecionada" 
         serie_final = "Não selecionada" 
             
-# --- MUDANÇA (PEDIDO DE LIVRO COM CARREGAMENTO) ---
 elif st.session_state.orcamento_mode == "Pedido de Livro":
     st.header("📚 Gerador de Pedido de Livro")
     
-    arquivos_escola = [f for f in os.listdir(CAMINHO_BASE) if f.endswith(".xlsx") and f != ARQUIVO_BASE and not f.startswith("~$")]
-    opcoes_escolas = sorted([f.replace(".xlsx", "") for f in arquivos_escola])
+    if not drive_service or not opcoes_escolas:
+        st.error("Serviço do Google Drive não está disponível ou nenhuma planilha de escola foi encontrada.")
+        st.stop()
+        
     escola_selecionada = st.selectbox(
         "Selecione a escola (Opcional, para carregar livros)", 
         options=opcoes_escolas, 
@@ -1351,11 +1334,16 @@ elif st.session_state.orcamento_mode == "Pedido de Livro":
     
     aba_selecionada = None 
     if escola_selecionada:
-        caminho_arquivo = os.path.join(CAMINHO_BASE, escola_selecionada + ".xlsx")
+        nome_arquivo = escola_selecionada + ".xlsx"
         try:
-            abas = pd.ExcelFile(caminho_arquivo).sheet_names
+            file_buffer = download_excel_bytes(drive_service, PASTA_DRIVE_PLANILHAS_ID, nome_arquivo)
+            if file_buffer is None:
+                st.error(f"Não foi possível carregar o arquivo {nome_arquivo} do Google Drive.")
+                st.stop()
+            xl = pd.ExcelFile(file_buffer, engine='openpyxl')
+            abas = xl.sheet_names
         except Exception as e:
-            st.error(f"Não foi possível ler o arquivo da escola: {e}"); st.stop()
+            st.error(f"Não foi possível ler as abas do arquivo '{nome_arquivo}': {e}"); st.stop()
             
         aba_selecionada = st.selectbox("Escolha a série", abas, key="aba_selecionada_livro") 
     
@@ -1379,7 +1367,7 @@ elif st.session_state.orcamento_mode == "Pedido de Livro":
 
         if (escola_selecionada != st.session_state.escola_anterior) or (aba_selecionada != st.session_state.aba_anterior):
             st.toast(f"Carregando livros para {escola_selecionada} - {aba_selecionada}...")
-            df_itens = carregar_itens(caminho_arquivo, aba_selecionada)
+            df_itens = carregar_itens(drive_service, PASTA_DRIVE_PLANILHAS_ID, nome_arquivo, aba_selecionada)
             
             if not df_itens.empty:
                 col_tipo = [c for c in df_itens.columns if "TIPO" in c][0]
@@ -1405,72 +1393,66 @@ elif st.session_state.orcamento_mode == "Pedido de Livro":
         pode_carregar = True 
         escola_final = "Pedido de Livro" 
         serie_final = "Avulso"
-# --- FIM DA MUDANÇA (MODO PEDIDO DE LIVRO) ---
 
 elif st.session_state.orcamento_mode == "Buscador Itens":
     st.header("🔎 Busca Global de Produtos")
-    st.info("Esta ferramenta varre todas as planilhas de escola na sua pasta para encontrar onde cada item é usado.")
+    st.info("Esta ferramenta varre todas as planilhas de escola no Google Drive para encontrar onde cada item é usado.")
     
     if base_de_dados is None:
-        st.error("A Base de Dados (Excel) não pôde ser carregada. A busca não pode funcionar.")
+        st.error("A Base de Dados (do Drive) não pôde ser carregada. A busca não pode funcionar.")
     else:
-        st.toast("Construindo banco de dados de produtos...")
-        with st.spinner("Lendo todas as planilhas de escola... (Isso pode levar um minuto)"):
-            df_global_produtos = build_full_database(base_de_dados)
-        st.success(f"Banco de dados carregado! {len(df_global_produtos)} itens encontrados em todas as escolas.")
+        if st.button("Iniciar Busca Global (Pode ser lento)"):
+            with st.spinner("Lendo todas as planilhas do Google Drive... (Isso pode levar alguns minutos)"):
+                df_global_produtos = build_full_database(drive_service, base_de_dados)
+            st.success(f"Banco de dados carregado! {len(df_global_produtos)} itens encontrados em todas as escolas.")
+            st.session_state.df_global_produtos = df_global_produtos
         
-        search_term = st.text_input("Digite o nome do produto ou COD (ex: TINTA PVA ou 80023):")
-        
-        if search_term:
-            search_term_upper = normalizar_texto(search_term)
+        if "df_global_produtos" in st.session_state:
+            search_term = st.text_input("Digite o nome do produto ou COD (ex: TINTA PVA ou 80023):")
             
-            df_filtrado = df_global_produtos[
-                (df_global_produtos['Descrição'].str.contains(search_term_upper, case=False, na=False)) |
-                (df_global_produtos['COD'] == search_term_upper)
-            ]
-            
-            if df_filtrado.empty:
-                st.warning("Nenhum item encontrado com esse nome ou código.")
-            else:
-                st.markdown("---")
-                st.subheader(f"Resultados para: '{search_term}'")
+            if search_term:
+                search_term_upper = normalizar_texto(search_term)
                 
-                st.dataframe(df_filtrado[['Escola', 'Série', 'Descrição', 'QTD', 'TIPO']])
+                df_filtrado = st.session_state.df_global_produtos[
+                    (st.session_state.df_global_produtos['Descrição'].str.contains(search_term_upper, case=False, na=False)) |
+                    (st.session_state.df_global_produtos['COD'] == search_term_upper)
+                ]
                 
-                st.subheader("Resumo de Quantidade Total por Escola")
-                df_resumo = df_filtrado.groupby('Escola')['QTD'].sum().reset_index().rename(columns={'QTD': 'QTD Total'})
-                st.dataframe(df_resumo)
+                if df_filtrado.empty:
+                    st.warning("Nenhum item encontrado com esse nome ou código.")
+                else:
+                    st.markdown("---")
+                    st.subheader(f"Resultados para: '{search_term}'")
+                    st.dataframe(df_filtrado[['Escola', 'Série', 'Descrição', 'QTD', 'TIPO']])
+                    
+                    st.subheader("Resumo de Quantidade Total por Escola")
+                    df_resumo = df_filtrado.groupby('Escola')['QTD'].sum().reset_index().rename(columns={'QTD': 'QTD Total'})
+                    st.dataframe(df_resumo)
     
     pode_carregar = False 
 
 elif st.session_state.orcamento_mode == "Atualizador PDF":
     st.header("🚀 Atualização em Lote para o Google Drive")
-    st.warning("Atenção: Este processo irá ler todas as planilhas de escola na sua pasta, gerar novos PDFs, arquivar os antigos no Google Drive e atualizar sua Planilha Mestre. Isso pode levar alguns minutos.", icon="⚠️")
+    st.warning("Atenção: Este processo irá ler todas as planilhas de escola no Google Drive, gerar novos PDFs, arquivar os antigos no Google Drive e atualizar sua Planilha Mestre. Isso pode levar alguns minutos.", icon="⚠️")
     
     if not PLANILHA_MESTRE_ID or "COLE_O_ID" in PLANILHA_MESTRE_ID:
         st.error("Erro de Configuração: O ID da Planilha Mestre (`PLANILHA_MESTRE_ID`) não foi definido no topo do script.")
-    elif not PASTA_DRIVE_PRINCIPAL_ID or "COLE_O_ID" in PASTA_DRIVE_PRINCIPAL_ID:
-        st.error("Erro de Configuração: O ID da Pasta Principal (`PASTA_DRIVE_PRINCIPAL_ID`) não foi definido.")
-    elif not PASTA_DRIVE_ARQUIVO_MORTO_ID or "COLE_O_ID" in PASTA_DRIVE_ARQUIVO_MORTO_ID:
-        st.error("Erro de Configuração: O ID da Pasta Arquivo Morto (`PASTA_DRIVE_ARQUIVO_MORTO_ID`) não foi definido.")
+    # ... (outras verificações de ID) ...
     elif base_de_dados is None:
-        st.error("A Base de Dados (Excel) não pôde ser carregada. Verifique o arquivo.")
+        st.error("A Base de Dados (do Drive) não pôde ser carregada. Verifique o arquivo.")
     else:
         if st.button("INICIAR ATUALIZAÇÃO EM LOTE", type="primary"):
-            st.info("Iniciando... O Streamlit pode pedir para você autenticar no Google.")
-            with st.spinner("Autenticando com o Google... (Verifique a aba do navegador que abriu!)"):
+            st.info("Iniciando... O processo rodará no servidor.")
+            with st.spinner("Autenticando e iniciando o processo... (Isso pode demorar)"):
                 try:
-                    creds = get_google_creds()
-                    drive_service, sheets_service = get_google_services(creds)
-                    
+                    # Serviços já devem estar autenticados
                     if drive_service and sheets_service:
                         st.success("Autenticação com Google bem-sucedida!")
                         run_batch_update(base_de_dados, sheets_service, drive_service)
                     else:
                         st.error("Falha ao inicializar os serviços do Google.")
                 except Exception as e:
-                    st.error(f"Falha na autenticação do Google. Verifique seu arquivo 'client_secret.json'. Erro: {e}")
-                    st.info("Dica: Se o navegador abriu e deu erro, talvez você precise ir no Google Cloud > Tela de Permissão OAuth > e clicar em 'PUBLICAR APLICATIVO' para tirá-lo do modo 'teste'.")
+                    st.error(f"Falha na autenticação do Google. Erro: {e}")
     
     pode_carregar = False 
 # --- FIM DOS MODOS ---
@@ -1489,15 +1471,11 @@ if base_de_dados is not None and pode_carregar:
         with col2:
             st.text_input("Nome do Aluno:", key="vale_aluno")
         with col3:
-            st.text_input(
-                "Telefone:", 
-                key="vale_telefone", 
-                placeholder="(xx) xxxxx.xxxx",
-                max_chars=15
-            )
+            st.text_input("Telefone:", key="vale_telefone", placeholder="(xx) xxxxx.xxxx", max_chars=15)
         nome_cliente = None 
     
     elif st.session_state.orcamento_mode == "Pedido de Livro":
+        # Informações já foram pedidas acima
         nome_cliente = None 
         
     else:
@@ -1517,7 +1495,6 @@ if base_de_dados is not None and pode_carregar:
         st.markdown("---")
         st.markdown("**Para ADICIONAR o item selecionado ao final da lista:**")
         
-        # --- MUDANÇA (LAYOUT COMPACTO E 5 MODOS) ---
         if st.session_state.orcamento_mode == "Gerador de Vale":
             col1, col2 = st.columns([1, 2], vertical_alignment="bottom")
             with col1:
@@ -1532,7 +1509,7 @@ if base_de_dados is not None and pode_carregar:
             with col2:
                 st.button("Adicionar Item", type="primary", on_click=set_add_flag, use_container_width=True)
         
-        else: # Modo Orçamento Padrão
+        else: 
             col1, col2, col3 = st.columns([1, 2, 2], vertical_alignment="bottom") 
             with col1:
                 st.number_input("Quantidade:", min_value=1, value=1, step=1, key="qtd_adicionar")
@@ -1540,7 +1517,6 @@ if base_de_dados is not None and pode_carregar:
                 st.radio("Adicionar em:", ("Material", "Vale", "Livro", "Integral", "Bilingue"), key="tipo_adicionar", horizontal=True, label_visibility="collapsed")
             with col3:
                 st.button("Adicionar Item", type="primary", on_click=set_add_flag, use_container_width=True)
-        # --- FIM DA MUDANÇA ---
 
     if 'item_para_adicionar' in st.session_state and st.session_state.item_para_adicionar:
         flag_val = st.session_state.item_para_adicionar
@@ -1550,7 +1526,6 @@ if base_de_dados is not None and pode_carregar:
         elif isinstance(flag_val, dict):
             novo_df = pd.DataFrame([flag_val])
             
-            # --- MUDANÇA (5 CESTAS) ---
             tipo_adicionado = flag_val["TIPO"].upper() 
             
             if tipo_adicionado == "VALE":
@@ -1561,9 +1536,8 @@ if base_de_dados is not None and pode_carregar:
                 st.session_state.df_integral = pd.concat([st.session_state.df_integral, novo_df], ignore_index=True)
             elif tipo_adicionado == "BILINGUE":
                 st.session_state.df_bilingue = pd.concat([st.session_state.df_bilingue, novo_df], ignore_index=True)
-            else: # "MATERIAL"
+            else: 
                 st.session_state.df_material = pd.concat([st.session_state.df_material, novo_df], ignore_index=True)
-            # --- FIM DA MUDANÇA ---
                 
             st.success(f"Item '{flag_val['ITEM_STR']}' adicionado!")
             st.rerun()
@@ -1624,7 +1598,7 @@ if base_de_dados is not None and pode_carregar:
     else:
         total_livro = 0 
 
-    # --- INÍCIO DO NOVO BLOCO "INTEGRAL" (5 CESTAS) ---
+    # --- SEÇÃO 4: INTEGRAL ---
     if st.session_state.orcamento_mode not in ["Gerador de Vale", "Pedido de Livro"]:
         st.subheader("🎨 Itens do Período Integral")
         total_integral = 0
@@ -1641,9 +1615,8 @@ if base_de_dados is not None and pode_carregar:
         st.markdown("---")
     else:
         total_integral = 0 
-    # --- FIM DO NOVO BLOCO ---
 
-    # --- INÍCIO DO NOVO BLOCO "BILINGUE" (5 CESTAS) ---
+    # --- SEÇÃO 5: BILINGUE ---
     if st.session_state.orcamento_mode not in ["Gerador de Vale", "Pedido de Livro"]:
         st.subheader("🌎 Itens do Programa Bilíngue")
         total_bilingue = 0
@@ -1660,17 +1633,15 @@ if base_de_dados is not None and pode_carregar:
         st.markdown("---")
     else:
         total_bilingue = 0 
-    # --- FIM DO NOVO BLOCO ---
     
     
     # ---- Seção de Total e Observações (Não mostrar nos Modos Vale/Livro) ---
     if st.session_state.orcamento_mode not in ["Gerador de Vale", "Pedido de Livro"]:
-        # ATUALIZE O CÁLCULO DO TOTAL (5 CESTAS)
         valor_total_orcamento = total_material + total_vale + total_livro + total_integral + total_bilingue
         st.markdown(f"## Valor Total do Orçamento: <span style='color: green;'>R$ {valor_total_orcamento:,.2f}</span>", unsafe_allow_html=True)
         
         st.markdown("---")
-        data_validade = extrair_data_validade()
+        data_validade = extrair_data_validade(drive_service, PASTA_DRIVE_PLANILHAS_ID)
         st.markdown(f"**📅 Data de validade:** {data_validade}")
 
         st.subheader("Observações do Orçamento")
@@ -1683,59 +1654,21 @@ if base_de_dados is not None and pode_carregar:
             
         st.markdown("---")
         
+        # --- RASCUNHOS DESABILITADOS NA NUVEM ---
         if st.session_state.orcamento_mode in ("Novo Orçamento", "Orçamento Escola Pronto"):
             st.header("💾 Salvar Rascunho")
-            
-            nome_rascunho = st.text_input("Nome do Rascunho:", value=nome_cliente)
-            
-            if st.button("Salvar Rascunho Atual"):
-                if not nome_rascunho:
-                    st.error("Por favor, digite um nome para o rascunho.")
-                else:
-                    try:
-                        # --- MUDANÇA (5 CESTAS) ---
-                        dados_para_salvar = {
-                            "original_mode": st.session_state.orcamento_mode,
-                            "escola": escola_final,
-                            "serie": serie_final,
-                            "nome_cliente": nome_rascunho, 
-                            "vale_aluno": "", 
-                            "vale_responsavel": "",
-                            "vale_telefone": "",
-                            "obs_nt": st.session_state.obs_nao_trabalhamos,
-                            "obs_pe": st.session_state.obs_para_escolher,
-                            "obs_outras": st.session_state.obs_outras,
-                            "material": st.session_state.df_material.to_dict('records'),
-                            "vale": st.session_state.df_vale.to_dict('records'),
-                            "livro": st.session_state.df_livro.to_dict('records'),
-                            "integral": st.session_state.df_integral.to_dict('records'),
-                            "bilingue": st.session_state.df_bilingue.to_dict('records')
-                        }
-                        # --- FIM DA MUDANÇA ---
-                        
-                        nome_arquivo_sanitizado = sanitizar_nome_arquivo(nome_rascunho)
-                        data_hora_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        nome_arquivo_final = f"{data_hora_str}_{nome_arquivo_sanitizado}.json"
-                        caminho_completo_rascunho = os.path.join(CAMINHO_SALVAR_RASCUNHOS, nome_arquivo_final)
-                        
-                        with open(caminho_completo_rascunho, 'w', encoding='utf-8') as f:
-                            json.dump(dados_para_salvar, f, ensure_ascii=False, indent=4)
-                        
-                        st.success(f"Rascunho '{nome_arquivo_final}' salvo com sucesso!")
-                        
-                    except Exception as e:
-                        st.error(f"Ocorreu um erro ao salvar o rascunho: {e}")
-            
+            st.warning("Salvar rascunhos no servidor não é suportado nesta versão.")
             st.markdown("---")
+        # --- FIM DA MUDANÇA ---
 
-        st.header("🖨️ Salvar e Abrir PDF")
+        # --- MUDANÇA (BOTÃO DE DOWNLOAD) ---
+        st.header("🖨️ Gerar PDF para Download")
         if nome_cliente:
-            if st.button("Salvar Orçamento e Abrir PDF", type="primary"):
+            if st.button("Gerar Orçamento em PDF", type="primary"):
                 
-                # --- MUDANÇA (5 CESTAS) ---
                 df_mat_final = st.session_state.df_material
                 df_vale_final = st.session_state.df_vale
-                df_livro_final = st.session_state.df_livro
+                df_livro_final = st.session_state.df_livro 
                 df_integral_final = st.session_state.df_integral
                 df_bilingue_final = st.session_state.df_bilingue
                 
@@ -1746,21 +1679,23 @@ if base_de_dados is not None and pode_carregar:
                     if not df.empty:
                         col_lista = [c for c in df.columns if "UNIT" in c or ("VALOR" in c and "TOTAL" not in c) or "PRECO" in c]
                         col_real = col_lista[0] if col_lista else col_nome_padrao
+                        # [CORREÇÃO PREÇO LIVRO] Não validar zeros para livros, integral ou bilingue
                         if col_real in df.columns and (df[col_real] == 0).any():
-                            return True
+                            # Se a coluna TIPO existir, verificamos se é um item especial
+                            if "TIPO" in df.columns:
+                                tipos_especiais = ["LIVRO", "DICIONARIO", "LIVROS", "DICIONÁRIO", "INTEGRAL", "BILINGUE", "BILINGÜE"]
+                                if df[df[col_real] == 0]['TIPO'].str.upper().isin(tipos_especiais).all():
+                                    return False # É um livro/especial com preço 0, está OK
+                            return True # É material normal com preço 0
                     return False
                 
                 if checar_zeros(df_mat_final, col_valor_unit_padrao) or \
-                   checar_zeros(df_vale_final, col_valor_unit_padrao) or \
-                   checar_zeros(df_livro_final, col_valor_unit_padrao) or \
-                   checar_zeros(df_integral_final, col_valor_unit_padrao) or \
-                   checar_zeros(df_bilingue_final, col_valor_unit_padrao):
+                   checar_zeros(df_vale_final, col_valor_unit_padrao):
+                   # Não checamos mais livro, integral ou bilingue
                     tem_zero = True
-                
-                # --- FIM DA MUDANÇA (5 CESTAS) ---
                     
                 if tem_zero:
-                    st.error("Erro: Um ou mais itens estão com valor R$ 0,00. Corrija os códigos ou a planilha base antes de gerar o PDF.")
+                    st.error("Erro: Um ou mais itens de MATERIAL ou VALE estão com valor R$ 0,00. Corrija os códigos ou a planilha base antes de gerar o PDF.")
                 else:
                     with st.spinner("Gerando seu PDF, aguarde..."):
                         if st.session_state.orcamento_mode == "Orçamento Escola Pronto":
@@ -1770,7 +1705,6 @@ if base_de_dados is not None and pode_carregar:
 
                         logo_base64 = converter_imagem_base64(LOGO_PATH)
                         
-                        # --- MUDANÇA (5 CESTAS) ---
                         totais = {
                             "material": total_material, "vale": total_vale, "livro": total_livro, 
                             "integral": total_integral, "bilingue": total_bilingue, "geral": valor_total_orcamento
@@ -1782,32 +1716,32 @@ if base_de_dados is not None and pode_carregar:
                             st.session_state.obs_nao_trabalhamos, 
                             st.session_state.obs_para_escolher, st.session_state.obs_outras, totais
                         )
-                        # --- FIM DA MUDANÇA ---
                         
                         pdf_bytes = converter_html_para_pdf(html_string)
                         
                         if pdf_bytes:
                             nome_cliente_sanitizado = sanitizar_nome_arquivo(nome_cliente)
                             nome_arquivo = f"Orcamento {nome_escola_pdf} {serie_final} - {nome_cliente_sanitizado}.pdf"
-                            caminho_completo_pdf = os.path.join(CAMINHO_SALVAR_PDF, nome_arquivo)
-                            try:
-                                with open(caminho_completo_pdf, "wb") as f: f.write(pdf_bytes)
-                                st.success(f"✅ Orçamento salvo com sucesso em: {caminho_completo_pdf}")
-                                abrir_arquivo(caminho_completo_pdf)
-                            except Exception as e:
-                                st.error(f"Erro ao salvar ou abrir o arquivo: {e}")
+                            
+                            st.success(f"✅ Orçamento gerado com sucesso!")
+                            st.download_button(
+                                label="Clique aqui para baixar o PDF",
+                                data=pdf_bytes,
+                                file_name=nome_arquivo,
+                                mime="application/pdf"
+                            )
                         else:
                             st.error("Não foi possível gerar o PDF.")
         else:
-            st.warning("Por favor, digite o nome do cliente acima para poder salvar o PDF.")
+            st.warning("Por favor, digite o nome do cliente acima para poder gerar o PDF.")
 
     # --- BOTÕES (VALE E LIVRO) ---
     else: 
         if st.session_state.orcamento_mode == "Gerador de Vale":
-            st.header("🖨️ Salvar e Abrir PDF do Vale")
+            st.header("🖨️ Gerar PDF do Vale")
             
             if st.session_state.vale_aluno and st.session_state.vale_responsavel and st.session_state.vale_telefone:
-                if st.button("Salvar Vale e Abrir PDF", type="primary"):
+                if st.button("Gerar Vale em PDF", type="primary"):
 
                     df_vale_final = st.session_state.df_vale
                     total_vale_final = total_vale 
@@ -1825,12 +1759,11 @@ if base_de_dados is not None and pode_carregar:
                         st.error("Erro: Um ou mais itens estão com valor R$ 0,00. Corrija os códigos ou a planilha base antes de gerar o PDF.")
                     else:
                         with st.spinner("Gerando PDF do Vale..."):
-                            
                             nome_escola_pdf = escola_final.split('_')[0]
                             telefone_formatado = formatar_telefone(st.session_state.vale_telefone)
                             
                             try:
-                                caminho_completo_pdf = gerar_vale_pdf_reportlab(
+                                pdf_bytes = gerar_vale_pdf_reportlab(
                                     LOGO_PATH, 
                                     nome_escola_pdf, 
                                     serie_final,
@@ -1840,7 +1773,17 @@ if base_de_dados is not None and pode_carregar:
                                     df_vale_final,
                                     total_vale_final
                                 )
-                                st.success(f"✅ Vale salvo com sucesso em: {caminho_completo_pdf}")
+                                
+                                nome_aluno_sanitizado = sanitizar_nome_arquivo(st.session_state.vale_aluno)
+                                nome_arquivo = f"Vale {nome_escola_pdf} {serie_final} - {nome_aluno_sanitizado}.pdf"
+                                
+                                st.success(f"✅ Vale gerado com sucesso!")
+                                st.download_button(
+                                    label="Clique aqui para baixar o PDF",
+                                    data=pdf_bytes,
+                                    file_name=nome_arquivo,
+                                    mime="application/pdf"
+                                )
                             except Exception as e:
                                 st.error(f"Erro ao gerar PDF do Vale com ReportLab: {e}")
                                 st.exception(e) 
@@ -1848,39 +1791,39 @@ if base_de_dados is not None and pode_carregar:
                 st.warning("Por favor, preencha o Nome do Aluno, Responsável e Telefone para salvar o Vale.")
         
         elif st.session_state.orcamento_mode == "Pedido de Livro":
-            st.header("🖨️ Salvar e Abrir Pedido de Livro (2 Vias)")
+            st.header("🖨️ Gerar Pedido de Livro (2 Vias)")
             
             if st.session_state.livro_cliente and st.session_state.livro_telefone:
-                if st.button("Salvar Pedido (2 vias) e Abrir PDF", type="primary"):
+                if st.button("Gerar Pedido (2 vias) em PDF", type="primary"):
                     
                     df_livro_final = st.session_state.df_livro
                     
-                    tem_zero = False
-                    col_valor_unit_padrao = "VALOR UNITARIO" 
-                    if not df_livro_final.empty:
-                        # --- [CORREÇÃO PREÇO LIVRO] ---
-                        # Para livros, nós CONFIAMOS no valor 0, então não validamos
-                        pass
-                    
-                    if tem_zero: # Esta validação não será mais acionada para livros
-                        st.error("Erro: Um ou mais itens estão com valor R$ 0,00. Corrija os códigos ou a planilha base antes de gerar o PDF.")
-                    else:
-                        with st.spinner("Gerando PDF (2 vias)..."):
-                            try:
-                                caminho_completo_pdf = gerar_pedido_livro_pdf_reportlab(
-                                    LOGO_PATH,
-                                    st.session_state.livro_cliente,
-                                    st.session_state.livro_telefone,
-                                    df_livro_final,
-                                    total_livro, 
-                                    st.session_state.livro_obs 
-                                )
-                                st.success(f"✅ Pedido salvo com sucesso em: {caminho_completo_pdf}")
-                            except Exception as e:
-                                st.error(f"Erro ao gerar PDF do Pedido de Livro: {e}")
-                                st.exception(e)
+                    with st.spinner("Gerando PDF (2 vias)..."):
+                        try:
+                            pdf_bytes = gerar_pedido_livro_pdf_reportlab(
+                                LOGO_PATH,
+                                st.session_state.livro_cliente,
+                                st.session_state.livro_telefone,
+                                df_livro_final,
+                                total_livro, 
+                                st.session_state.livro_obs 
+                            )
+                            
+                            nome_cliente_sanitizado = sanitizar_nome_arquivo(st.session_state.livro_cliente)
+                            nome_arquivo = f"Pedido Livro - {nome_cliente_sanitizado}.pdf"
+                            
+                            st.success(f"✅ Pedido gerado com sucesso!")
+                            st.download_button(
+                                label="Clique aqui para baixar o PDF",
+                                data=pdf_bytes,
+                                file_name=nome_arquivo,
+                                mime="application/pdf"
+                            )
+                        except Exception as e:
+                            st.error(f"Erro ao gerar PDF do Pedido de Livro: {e}")
+                            st.exception(e)
             else:
-                st.warning("Por favor, preencha o Nome do Cliente e o Telefone para salvar o Pedido.")
+                st.warning("Por favor, preencha o Nome do Cliente e o Telefone para gerar o Pedido.")
         
 
 elif not st.session_state.get("escola_selecionada_select") and st.session_state.orcamento_mode == "Orçamento Escola Pronto":
@@ -1898,5 +1841,4 @@ elif st.session_state.orcamento_mode == "Buscador Itens":
 elif st.session_state.orcamento_mode == "Atualizador PDF":
     pass 
 elif base_de_dados is None:
-
-    st.error("A base de dados (Excel) não pôde ser carregada. O aplicativo não pode continuar.")
+    st.error("A base de dados (do Drive) não pôde ser carregada. O aplicativo não pode continuar.")
