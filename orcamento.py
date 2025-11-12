@@ -752,7 +752,7 @@ def autenticar_google():
             creds_json = json.loads(creds_json)
 
         # Cria o fluxo OAuth
-        flow = InstalledAppFlow.from_client_secrets_info(creds_json, SCOPES)
+        flow = InstalledAppFlow.from_client_config(creds_json, SCOPES)
 
         # Executa o login via console (funciona no Streamlit Cloud)
         creds = flow.run_console()
@@ -1852,5 +1852,6 @@ elif st.session_state.orcamento_mode == "Atualizador PDF":
     pass 
 elif base_de_dados is None:
     st.error("A base de dados (do Drive) não pôde ser carregada. O aplicativo não pode continuar.")
+
 
 
