@@ -42,7 +42,7 @@ from googleapiclient.http import MediaIoBaseUpload
 # --- CAMINHOS (Configure o seu) ---
 CAMINHO_BASE = "C:/Users/Amanda/Desktop/Excel"
 ARQUIVO_BASE = "Planilha Salva Sono_1.xlsx" 
-LOGO_PATH = os.path.join(CAMINHO_BASE, "Logo.jpg")
+LOGO_PATH = os.path.join(CAMINHO_BASE, "Logo.png")
 HEADER_DA_PLANILHA = 14 
 
 # --- CAMINHO PARA SALVAR OS PDFS (LOCAL) ---
@@ -1898,4 +1898,5 @@ elif st.session_state.orcamento_mode == "Buscador Itens":
 elif st.session_state.orcamento_mode == "Atualizador PDF":
     pass 
 elif base_de_dados is None:
+
     st.error("A base de dados (Excel) não pôde ser carregada. O aplicativo não pode continuar.")
