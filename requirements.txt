@@ -5,5 +5,5 @@ xhtml2pdf
 reportlab
 gspread
 google-auth
-google-auth-oauthlib>=1.0.0
+google-auth-oauthlib>=1.2.3
 google-api-python-client
