@@ -1,0 +1,10 @@
+streamlit
+pandas
+openpyxl
+xhtml2pdf
+reportlab
+gspread
+google-oauth2-credentials
+google-auth-transport-requests
+google-auth-oauthlib
+google-api-python-client
