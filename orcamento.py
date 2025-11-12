@@ -4,8 +4,8 @@ import openpyxl
 import os
 from datetime import datetime
 import unicodedata
-import json 
-from io import BytesIO # Essencial para ler/escrever arquivos em memória
+import json
+from io import BytesIO  # Essencial para ler/escrever arquivos em memória
 
 # --- NOVAS BIBLIOTECAS PARA O PDF (Orçamento) ---
 import base64
@@ -13,6 +13,12 @@ from xhtml2pdf import pisa
 import sys
 import subprocess
 # --- FIM DAS NOVAS BIBLIOTECAS ---
+
+# --- BIBLIOTECAS PARA GOOGLE DRIVE / PLANILHAS ---
+import gspread
+from googleapiclient.discovery import build
+from google_auth_oauthlib.flow import InstalledAppFlow
+# --- FIM GOOGLE DRIVE ---
 
 # --- NOVAS BIBLIOTECAS PARA O PDF (Vale / Livro) ---
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
@@ -731,34 +737,38 @@ def converter_html_para_pdf(html_string):
         return None
 # --- FIM DAS FUNÇÕES PDF ---
 
-
-# --- FUNÇÕES GOOGLE (MODIFICADAS PARA NUVEM) ---
 @st.cache_resource
-def get_google_creds():
-    """Autentica com o Google usando st.secrets."""
-    # O st.secrets["google_creds"] deve conter o JSON do client_secret.json
-    # O Streamlit Cloud gerará e armazenará o token.json automaticamente
-    creds_json = st.secrets["google_creds"]
-    creds = Credentials.from_authorized_user_info(creds_json, SCOPES)
-    
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            # Este é o fluxo interativo, só vai rodar na primeira vez no servidor
-            flow = InstalledAppFlow.from_client_secrets_info(creds_json, SCOPES)
-            creds = flow.run_local_server(port=0) # O Streamlit Cloud lida com isso
-    return creds
-
-@st.cache_resource
-def get_google_services(_creds):
+def autenticar_google():
+    """Autentica com Google usando o client_secret.json armazenado em st.secrets."""
     try:
-        drive_service = build('drive', 'v3', credentials=_creds)
-        sheets_service = gspread.authorize(_creds)
+        if "google_creds" not in st.secrets:
+            st.error("Erro: 'google_creds' (client_secret.json) não encontrado nos Segredos do Streamlit.")
+            st.info("Adicione o conteúdo do seu client_secret.json em 'google_creds' no painel de segredos.")
+            return None, None
+
+        # Converte string JSON em dicionário
+        creds_json = st.secrets["google_creds"]
+        if isinstance(creds_json, str):
+            creds_json = json.loads(creds_json)
+
+        # Cria o fluxo OAuth
+        flow = InstalledAppFlow.from_client_secrets_info(creds_json, SCOPES)
+
+        # Executa o login via console (funciona no Streamlit Cloud)
+        creds = flow.run_console()
+
+        # Conecta com os serviços Google Drive e Sheets
+        drive_service = build('drive', 'v3', credentials=creds)
+        sheets_service = gspread.authorize(creds)
+
         return drive_service, sheets_service
+
     except Exception as e:
-        st.error(f"Erro ao construir serviços do Google: {e}")
+        st.error(f"Erro na autenticação do Google: {e}")
+        st.exception(e)
         return None, None
+
+drive_service, sheets_service = autenticar_google()
 
 def find_file_in_drive(drive_service, pasta_id, nome_arquivo):
     """Procura um arquivo pelo nome exato dentro de uma pasta específica."""
@@ -1842,4 +1852,5 @@ elif st.session_state.orcamento_mode == "Atualizador PDF":
     pass 
 elif base_de_dados is None:
     st.error("A base de dados (do Drive) não pôde ser carregada. O aplicativo não pode continuar.")
+
 
