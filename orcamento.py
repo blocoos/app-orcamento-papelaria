@@ -1072,8 +1072,8 @@ def autenticar_google():
 
         # O Streamlit Cloud gerencia o token.json automaticamente.
         # Esta é a forma correta de usar o InstalledAppFlow
-        flow = InstalledAppFlow.from_client_secrets_info(
-            st.secrets["google_creds"]["web"],
+        flow = InstalledAppFlow.from_client_config(
+            st.secrets["google_creds"],
             SCOPES,
             redirect_uri='urn:ietf:wg:oauth:2.0:oob' # Essencial para o Streamlit Cloud
         )
@@ -1852,6 +1852,7 @@ elif st.session_state.orcamento_mode == "Atualizador PDF":
     pass 
 elif base_de_dados is None:
     st.error("A base de dados (do Drive) não pôde ser carregada. O aplicativo não pode continuar.")
+
 
 
 
