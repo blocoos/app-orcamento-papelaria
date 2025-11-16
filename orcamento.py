@@ -753,8 +753,6 @@ def autenticar_google():
            redirect_uri=creds_json["web"]["redirect_uris"][0]
         )
 
-        )
-
         # Executa o login via console (funciona no Streamlit Cloud)
         creds = flow.run_console()
 
@@ -1857,6 +1855,7 @@ elif st.session_state.orcamento_mode == "Atualizador PDF":
     pass 
 elif base_de_dados is None:
     st.error("A base de dados (do Drive) não pôde ser carregada. O aplicativo não pode continuar.")
+
 
 
 
