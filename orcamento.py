@@ -748,9 +748,11 @@ def autenticar_google():
 
         # Cria o fluxo OAuth usando client_config
         flow = Flow.from_client_config(
-            {"web": creds_json},
-            scopes=SCOPES,
-            redirect_uri=creds_json["redirect_uris"][0]
+           creds_json,   # aqui já está no formato correto com "web"
+           scopes=SCOPES,
+           redirect_uri=creds_json["web"]["redirect_uris"][0]
+        )
+
         )
 
         # Executa o login via console (funciona no Streamlit Cloud)
@@ -1855,6 +1857,7 @@ elif st.session_state.orcamento_mode == "Atualizador PDF":
     pass 
 elif base_de_dados is None:
     st.error("A base de dados (do Drive) não pôde ser carregada. O aplicativo não pode continuar.")
+
 
 
 
