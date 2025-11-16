@@ -754,7 +754,8 @@ def autenticar_google():
         )
 
         # Executa o login via console (funciona no Streamlit Cloud)
-        creds = flow.run_console()
+        creds = flow.run_local_server(port=8501)
+
 
         # Conecta com os serviços Google Drive e Sheets
         drive_service = build('drive', 'v3', credentials=creds)
@@ -1855,6 +1856,7 @@ elif st.session_state.orcamento_mode == "Atualizador PDF":
     pass 
 elif base_de_dados is None:
     st.error("A base de dados (do Drive) não pôde ser carregada. O aplicativo não pode continuar.")
+
 
 
 
