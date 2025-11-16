@@ -752,7 +752,7 @@ def autenticar_google():
             creds_json = json.loads(creds_json)
 
         # Cria o fluxo OAuth
-        "client_secret.json", scopes=SCOPES, redirect_uri="https://app-orcamento-papelaria-5dpaibzq9yccvglwb9nvdg.streamlit.app/")
+        "client_secret.json", scopes=SCOPES, redirect_uri="https://app-orcamento-papelaria-5dpaibzq9yccvglwb9nvdg.streamlit.app/"
 
         # Executa o login via console (funciona no Streamlit Cloud)
         creds = flow.run_local_server()
@@ -1852,6 +1852,7 @@ elif st.session_state.orcamento_mode == "Atualizador PDF":
     pass 
 elif base_de_dados is None:
     st.error("A base de dados (do Drive) não pôde ser carregada. O aplicativo não pode continuar.")
+
 
 
 
