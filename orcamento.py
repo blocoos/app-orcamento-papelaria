@@ -49,7 +49,6 @@ HEADER_DA_PLANILHA = 14
 # Caminhos de salvar PDF/Rascunho não são mais usados.
 # --- FIM DA MUDANÇA ---
 
-
 # --- CONFIGURAÇÕES DO GOOGLE DRIVE (COM SEUS IDs) ---
 PLANILHA_MESTRE_ID = "1P2aJCePtRVaqx9pnw2t_L1vwiKeIFoP-FkLAGXXb7rY" 
 PASTA_DRIVE_PRINCIPAL_ID = "1tzmGPT9mvsfCrBW8vP81f-1kQ6J9iv1b"
@@ -83,7 +82,6 @@ except Exception as e:
     st.error(f"Erro FATAL: Não foi possível carregar as fontes 'arial.ttf' ou 'arialbd.ttf'. Verifique se elas estão no repositório GitHub. Erro: {e}")
     st.stop()
 # --- FIM DO REGISTRO DA FONTE ---
-
 
 # --- FUNÇÕES DE ARQUIVO (MODIFICADAS PARA NUVEM) ---
 
@@ -733,43 +731,6 @@ def converter_html_para_pdf(html_string):
         return None
 # --- FIM DAS FUNÇÕES PDF ---
 
-@st.cache_resource
-def autenticar_google():
-    """Autentica com Google usando os dados do client_secret.json via st.secrets."""
-    try:
-        if "google_creds" not in st.secrets:
-            st.error("Erro: 'google_creds' não encontrado nos Segredos do Streamlit.")
-            st.info("Adicione o conteúdo do seu client_secret.json em 'google_creds' no painel de segredos.")
-            return None, None
-
-        # Converte string JSON em dicionário
-        creds_json = st.secrets["google_creds"]
-        if isinstance(creds_json, str):
-            creds_json = json.loads(creds_json)
-
-        # Cria o fluxo OAuth usando client_config
-        flow = InstalledAppFlow.from_client_config(
-            creds_json,
-            scopes=SCOPES
-        )
-
-        # Executa o login via console (funciona no Streamlit Cloud)
-        creds = flow.run_local_server(port=8501)
-
-
-        # Conecta com os serviços Google Drive e Sheets
-        drive_service = build('drive', 'v3', credentials=creds)
-        sheets_service = gspread.authorize(creds)
-
-        return drive_service, sheets_service
-
-    except Exception as e:
-        st.error(f"Erro na autenticação do Google: {e}")
-        st.exception(e)
-        return None, None
-
-drive_service, sheets_service = autenticar_google()
-
 def find_file_in_drive(drive_service, pasta_id, nome_arquivo):
     """Procura um arquivo pelo nome exato dentro de uma pasta específica."""
     query = f"name='{nome_arquivo}' and '{pasta_id}' in parents and trashed=false"
@@ -1095,16 +1056,10 @@ def autenticar_google():
         st.error(f"Erro na autenticação do Google: {e}")
         st.exception(e)
         return None, None
-        
+    
 # --- FIM DA SUBSTITUIÇÃO ---
 
-        return drive_service, sheets_service
-        
-    except Exception as e:
-        st.error(f"Erro na autenticação do Google: {e}")
-        st.exception(e)
-        return None, None
-
+# Esta é a chamada da função. Ela SÓ deve acontecer UMA VEZ.
 drive_service, sheets_service = autenticar_google()
 
 if drive_service:
@@ -1856,6 +1811,7 @@ elif st.session_state.orcamento_mode == "Atualizador PDF":
     pass 
 elif base_de_dados is None:
     st.error("A base de dados (do Drive) não pôde ser carregada. O aplicativo não pode continuar.")
+
 
 
 
