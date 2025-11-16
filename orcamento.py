@@ -17,8 +17,12 @@ import subprocess
 # --- BIBLIOTECAS PARA GOOGLE DRIVE / PLANILHAS ---
 import gspread
 from googleapiclient.discovery import build
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google_auth_oauthlib.flow import Flow
+from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from google_auth_oauthlib.flow import Flow   # <-- este é o correto para Streamlit Cloud
+# --- FIM GOOGLE DRIVE ---
+
 # --- FIM GOOGLE DRIVE ---
 
 # --- NOVAS BIBLIOTECAS PARA O PDF (Vale / Livro) ---
@@ -35,16 +39,6 @@ from reportlab.lib.units import cm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 # --- FIM DAS NOVAS BIBLIOTECAS ---
-
-# --- NOVAS BIBLIOTECAS PARA O GOOGLE ---
-import gspread
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
-# --- FIM DAS NOVAS BIBLIOTECAS ---
-
 
 # --- CAMINHOS (AGORA SÃO RELATIVOS OU CONSTANTES) ---
 # CAMINHO_BASE não é mais necessário
@@ -1861,5 +1855,6 @@ elif st.session_state.orcamento_mode == "Atualizador PDF":
     pass 
 elif base_de_dados is None:
     st.error("A base de dados (do Drive) não pôde ser carregada. O aplicativo não pode continuar.")
+
 
 
