@@ -739,10 +739,10 @@ def converter_html_para_pdf(html_string):
 
 @st.cache_resource
 def autenticar_google():
-    """Autentica com Google usando o client_secret.json armazenado em st.secrets."""
+    """Autentica com Google usando os dados do client_secret.json via st.secrets."""
     try:
         if "google_creds" not in st.secrets:
-            st.error("Erro: 'google_creds' (client_secret.json) não encontrado nos Segredos do Streamlit.")
+            st.error("Erro: 'google_creds' não encontrado nos Segredos do Streamlit.")
             st.info("Adicione o conteúdo do seu client_secret.json em 'google_creds' no painel de segredos.")
             return None, None
 
@@ -751,11 +751,15 @@ def autenticar_google():
         if isinstance(creds_json, str):
             creds_json = json.loads(creds_json)
 
-        # Cria o fluxo OAuth
-        "client_secret.json", scopes=SCOPES, redirect_uri="https://app-orcamento-papelaria-5dpaibzq9yccvglwb9nvdg.streamlit.app/"
+        # Cria o fluxo OAuth usando client_config
+        flow = Flow.from_client_config(
+            {"web": creds_json},
+            scopes=SCOPES,
+            redirect_uri=creds_json["redirect_uris"][0]
+        )
 
         # Executa o login via console (funciona no Streamlit Cloud)
-        creds = flow.run_local_server()
+        creds = flow.run_console()
 
         # Conecta com os serviços Google Drive e Sheets
         drive_service = build('drive', 'v3', credentials=creds)
@@ -1856,12 +1860,3 @@ elif st.session_state.orcamento_mode == "Atualizador PDF":
     pass 
 elif base_de_dados is None:
     st.error("A base de dados (do Drive) não pôde ser carregada. O aplicativo não pode continuar.")
-
-
-
-
-
-
-
-
-
