@@ -20,6 +20,7 @@ import subprocess
 import gspread
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import Flow
 # --- FIM GOOGLE DRIVE ---
 
 # --- NOVAS BIBLIOTECAS PARA O PDF (Vale / Livro) ---
