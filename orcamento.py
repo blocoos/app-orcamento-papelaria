@@ -6,6 +6,8 @@ from datetime import datetime
 import unicodedata
 import json
 from io import BytesIO  # Essencial para ler/escrever arquivos em memória
+from google_auth_oauthlib.flow import Flow
+
 
 # --- NOVAS BIBLIOTECAS PARA O PDF (Orçamento) ---
 import base64
@@ -1860,3 +1862,4 @@ elif st.session_state.orcamento_mode == "Atualizador PDF":
     pass 
 elif base_de_dados is None:
     st.error("A base de dados (do Drive) não pôde ser carregada. O aplicativo não pode continuar.")
+
