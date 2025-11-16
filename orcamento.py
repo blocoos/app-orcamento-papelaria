@@ -1063,35 +1063,39 @@ def limpar_state_para_novo_modo():
 
 @st.cache_resource
 def autenticar_google():
-    """Autentica com Google usando o fluxo OAuth do Streamlit (client_secret.json)."""
+    """Autentica com Google usando os dados do client_secret.json via st.secrets."""
     try:
         if "google_creds" not in st.secrets:
-            st.error("Erro Crítico: 'google_creds' (client_secret.json) não encontrado nos Segredos do Streamlit.")
-            st.info("Por favor, cole o conteúdo do seu client_secret.json (o primeiro que você criou) para o st.secrets.")
+            st.error("Erro: 'google_creds' não encontrado nos Segredos do Streamlit.")
+            st.info("Adicione o conteúdo do seu client_secret.json em 'google_creds' no painel de segredos.")
             return None, None
 
-        # O Streamlit Cloud gerencia o token.json automaticamente.
-        # Esta é a forma correta de usar o InstalledAppFlow
-        flow = InstalledAppFlow.from_client_config(
-            st.secrets["google_creds"][web],
-            SCOPES,
-            redirect_uri='urn:ietf:wg:oauth:2.0:oob' # Essencial para o Streamlit Cloud
+        # Converte string JSON em dicionário
+        creds_json = st.secrets["google_creds"]
+        if isinstance(creds_json, str):
+            creds_json = json.loads(creds_json)
+
+        # Cria o fluxo OAuth usando client_config
+        flow = Flow.from_client_config(
+            creds_json,
+            scopes=SCOPES,
+            redirect_uri=creds_json["web"]["redirect_uris"][0]
         )
 
-        # O Streamlit Cloud lida com este fluxo magicamente
-        # Ele vai pausar o app e te dar um link para autenticar no log
+        # Executa o login via console (funciona no Streamlit Cloud)
         creds = flow.run_console()
-        
+
+        # Conecta com os serviços Google Drive e Sheets
         drive_service = build('drive', 'v3', credentials=creds)
         sheets_service = gspread.authorize(creds)
 
         return drive_service, sheets_service
-        
+
     except Exception as e:
         st.error(f"Erro na autenticação do Google: {e}")
-        st.info("O Streamlit tentará abrir uma aba de autenticação. Por favor, autorize e recarregue a página.")
         st.exception(e)
         return None, None
+        
 # --- FIM DA SUBSTITUIÇÃO ---
 
         return drive_service, sheets_service
@@ -1852,6 +1856,7 @@ elif st.session_state.orcamento_mode == "Atualizador PDF":
     pass 
 elif base_de_dados is None:
     st.error("A base de dados (do Drive) não pôde ser carregada. O aplicativo não pode continuar.")
+
 
 
 
